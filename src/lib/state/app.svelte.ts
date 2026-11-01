@@ -1,0 +1,1016 @@
+import {
+  PUBLIC_APPWRITE_DATABASE_ID,
+  PUBLIC_APPWRITE_ENDPOINT,
+  PUBLIC_APPWRITE_PROJECT_ID
+} from '$app/env/public';
+import {
+  addDays,
+  endOfWeek,
+  isWithinDateRange,
+  nextWeekStart,
+  startOfWeek,
+  toIsoDate
+} from '#lib/domain/algorithms/week.js';
+import { calculateMilestoneProgress } from '#lib/domain/algorithms/milestone-progress.js';
+import { categoryDescendantIds } from '#lib/presentation/tree.js';
+import { applyTaskStatus } from '#lib/presentation/task-status.js';
+import type { ImportCategory } from '#lib/presentation/json-import.js';
+import { recommendStudyTasks } from '#lib/domain/algorithms/recommendation.js';
+import type {
+  Milestone,
+  MilestoneProgress,
+  RecommendationResult
+} from '#lib/domain/models/analytics.js';
+import type { CategoryColor } from '#lib/domain/models/category-color.js';
+import type { IsoDate, WeekStart } from '#lib/domain/models/common.js';
+import type { ActivityLog } from '#lib/domain/models/execution.js';
+import type {
+  Category,
+  Task,
+  Topic
+} from '#lib/domain/models/hierarchy.js';
+import type { WeeklyPoolEntry } from '#lib/domain/models/planning.js';
+import type { Workspace } from '#lib/domain/models/workspace.js';
+import type { TaskStatus } from '#lib/domain/models/task-status.js';
+import type { WeightGrade } from '#lib/domain/models/weight.js';
+import {
+  asActivityLogId,
+  asCategoryId,
+  asTopicId,
+  asMilestoneId,
+  asTaskId,
+  asWeeklyPoolEntryId,
+  asWorkspaceId
+} from '#lib/domain/models/identifiers.js';
+import type { AuthenticatedUser } from '#lib/domain/ports/auth-port.js';
+import { createAppwriteInfrastructureFromEnv } from '#lib/infrastructure/appwrite/index.js';
+import {
+  addTaskToWeek,
+  completeTask,
+  createCategory,
+  createMilestone,
+  createTask,
+  createTopic,
+  deleteMilestone,
+  moveWeeklyPoolEntry,
+  removeWeekCompletion,
+  removeWeeklyPoolEntry,
+  scheduleWeeklyPoolEntry,
+  setTaskStatus as setTaskStatusUseCase,
+  updateCategory,
+  updateMilestone,
+  updateTask,
+  updateTopic
+} from '#lib/application/index.js';
+
+type Infrastructure = ReturnType<typeof createAppwriteInfrastructureFromEnv>;
+type SessionState = 'loading' | 'signed-out' | 'signed-in';
+
+const EMPTY_RECOMMENDATION: RecommendationResult = { primary: null, alternatives: [] };
+
+export class AppStore {
+  session = $state<SessionState>('loading');
+  user = $state<AuthenticatedUser | null>(null);
+  workspaces = $state<readonly Workspace[]>([]);
+  workspace = $state<Workspace | null>(null);
+  categories = $state<readonly Category[]>([]);
+  topics = $state<readonly Topic[]>([]);
+  tasks = $state<readonly Task[]>([]);
+  milestones = $state<readonly Milestone[]>([]);
+  milestoneProgress = $state<readonly MilestoneProgress[]>([]);
+  activityLogs = $state<readonly ActivityLog[]>([]);
+  weekEntries = $state<readonly WeeklyPoolEntry[]>([]);
+  recommendation = $state<RecommendationResult>(EMPTY_RECOMMENDATION);
+  weekStart = $state<WeekStart>(startOfWeek(toIsoDate(new Date())));
+  today = $state<IsoDate>(toIsoDate(new Date()));
+  busy = $state(false);
+  error = $state<string | null>(null);
+  initialized = $state(false);
+
+  private infrastructure: Infrastructure | null = null;
+  private initPromise: Promise<void> | null = null;
+  private loadToken = 0;
+  private writeQueue = new Map<string, Promise<void>>();
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private optimisticSeq = 0;
+
+  async init(): Promise<void> {
+    if (this.initialized) return;
+    if (this.initPromise !== null) return this.initPromise;
+    this.initPromise = this.initialize();
+    return this.initPromise;
+  }
+
+  async signIn(email: string, password: string): Promise<void> {
+    await this.withBusy(async () => {
+      const infra = this.requireInfrastructure();
+      const user = await infra.auth.signIn({ email, password });
+      this.user = user;
+      this.session = 'signed-in';
+      await this.loadWorkspaces();
+    });
+  }
+
+  async signUp(name: string, email: string, password: string): Promise<void> {
+    await this.withBusy(async () => {
+      const infra = this.requireInfrastructure();
+      const user = await infra.auth.signUp({ name, email, password });
+      this.user = user;
+      this.session = 'signed-in';
+      await this.loadWorkspaces();
+    });
+  }
+
+  async signOut(): Promise<void> {
+    await this.withBusy(async () => {
+      await this.requireInfrastructure().auth.signOut();
+      this.user = null;
+      this.session = 'signed-out';
+      this.workspace = null;
+      this.workspaces = [];
+      this.clearWorkspaceData();
+    });
+  }
+
+  async selectWorkspace(workspaceId: string): Promise<void> {
+    const workspace = this.workspaces.find((item) => item.id === workspaceId);
+    if (workspace === undefined) return;
+    this.workspace = workspace;
+    await this.refresh();
+  }
+
+  async createWorkspace(name: string): Promise<void> {
+    await this.withBusy(async () => {
+      const infra = this.requireInfrastructure();
+      const user = this.requireUser();
+      const now = infra.clock.now().toISOString();
+      const workspace = await infra.workspaces.save({
+        id: asWorkspaceId(infra.ids.next()),
+        name: name.trim() || 'My workspace',
+        ownerId: user.id,
+        createdAt: now,
+        updatedAt: now
+      });
+      this.workspaces = await infra.workspaces.listByOwner(user.id);
+      this.workspace = workspace;
+      await this.refresh();
+    });
+  }
+
+  async refresh(): Promise<void> {
+    if (this.workspace === null) return;
+    const token = ++this.loadToken;
+    await this.withBusy(() => this.reload(token));
+  }
+
+  async setWeek(weekStart: WeekStart): Promise<void> {
+    this.weekStart = weekStart;
+    await this.withBusy(() => this.loadWeek(++this.loadToken));
+  }
+
+  async addTaskToCurrentWeek(taskId: string, plannedDate: IsoDate | null = null): Promise<void> {
+    const workspaceId = this.workspace?.id;
+    if (workspaceId === undefined) return;
+    const id = asTaskId(taskId);
+    const weekStart = this.weekStart;
+    const tempId = asWeeklyPoolEntryId(`optimistic-${++this.optimisticSeq}`);
+    const temp: WeeklyPoolEntry = {
+      id: tempId,
+      workspaceId,
+      taskId: id,
+      weekStart,
+      plannedDate,
+      createdAt: new Date().toISOString()
+    };
+    this.weekEntries = [...this.weekEntries, temp];
+    this.recomputeDerived();
+
+    await this.queueWrite(`task-week:${taskId}`, () =>
+      this.withBusy(
+        async () => {
+          const infra = this.requireInfrastructure();
+          const saved = await addTaskToWeek(
+            {
+              weeklyPool: infra.weeklyPool,
+              tasks: infra.tasks,
+              activityLogs: infra.activityLogs,
+              clock: infra.clock,
+              ids: infra.ids
+            },
+            { workspaceId, taskId: id, weekStart, plannedDate }
+          );
+          this.weekEntries = this.weekEntries.map((entry) =>
+            entry.id === tempId ? saved : entry
+          );
+          this.recomputeDerived();
+        },
+        () => {
+          this.weekEntries = this.weekEntries.filter((entry) => entry.id !== tempId);
+          this.recomputeDerived();
+          this.scheduleRefresh();
+        }
+      )
+    );
+  }
+
+  async scheduleEntry(entryId: string, plannedDate: IsoDate | null): Promise<void> {
+    const id = asWeeklyPoolEntryId(entryId);
+    const entry = this.weekEntries.find((item) => item.id === id);
+    if (entry === undefined) return;
+    const previous = entry;
+    const optimistic: WeeklyPoolEntry = { ...entry, plannedDate };
+    this.replaceEntry(optimistic);
+    this.recomputeDerived();
+
+    await this.queueWrite(`entry:${entryId}`, () =>
+      this.withBusy(
+        async () => {
+          const infra = this.requireInfrastructure();
+          const workspaceId = this.workspace?.id;
+          if (workspaceId === undefined) return;
+          const saved = await scheduleWeeklyPoolEntry(
+            {
+              weeklyPool: infra.weeklyPool,
+              tasks: infra.tasks,
+              activityLogs: infra.activityLogs,
+              clock: infra.clock,
+              ids: infra.ids
+            },
+            { workspaceId, entryId: id, plannedDate }
+          );
+          this.replaceEntry(saved);
+          this.recomputeDerived();
+        },
+        () => {
+          this.replaceEntry(previous);
+          this.recomputeDerived();
+          this.scheduleRefresh();
+        }
+      )
+    );
+  }
+
+  async moveEntryToNextWeek(entryId: string): Promise<void> {
+    const id = asWeeklyPoolEntryId(entryId);
+    const entry = this.weekEntries.find((item) => item.id === id);
+    if (entry === undefined) return;
+    const target = nextWeekStart(this.weekStart);
+    const previous = this.weekEntries;
+    this.weekEntries = this.weekEntries.filter((item) => item.id !== id);
+    this.recomputeDerived();
+
+    await this.queueWrite(`entry:${entryId}`, () =>
+      this.withBusy(
+        async () => {
+          const infra = this.requireInfrastructure();
+          const workspaceId = this.workspace?.id;
+          if (workspaceId === undefined) return;
+          await moveWeeklyPoolEntry(
+            {
+              weeklyPool: infra.weeklyPool,
+              tasks: infra.tasks,
+              activityLogs: infra.activityLogs,
+              clock: infra.clock,
+              ids: infra.ids
+            },
+            { workspaceId, entryId: id, weekStart: target }
+          );
+        },
+        () => {
+          this.weekEntries = previous;
+          this.recomputeDerived();
+          this.scheduleRefresh();
+        }
+      )
+    );
+  }
+
+  async removeEntry(entryId: string): Promise<void> {
+    const id = asWeeklyPoolEntryId(entryId);
+    const previous = this.weekEntries;
+    if (!previous.some((entry) => entry.id === id)) return;
+    this.weekEntries = previous.filter((entry) => entry.id !== id);
+    this.recomputeDerived();
+
+    await this.queueWrite(`entry:${entryId}`, () =>
+      this.withBusy(
+        async () => {
+          const infra = this.requireInfrastructure();
+          const workspaceId = this.workspace?.id;
+          if (workspaceId === undefined) return;
+          await removeWeeklyPoolEntry(
+            {
+              weeklyPool: infra.weeklyPool,
+              tasks: infra.tasks,
+              activityLogs: infra.activityLogs,
+              clock: infra.clock,
+              ids: infra.ids
+            },
+            { workspaceId, entryId: id }
+          );
+        },
+        () => {
+          this.weekEntries = previous;
+          this.recomputeDerived();
+          this.scheduleRefresh();
+        }
+      )
+    );
+  }
+
+  async completeTask(taskId: string): Promise<void> {
+    const workspaceId = this.workspace?.id;
+    if (workspaceId === undefined) return;
+    const id = asTaskId(taskId);
+    const weekStart = this.weekStart;
+    const today = this.today;
+    const tasksBefore = this.tasks;
+    const logsBefore = this.activityLogs;
+    const now = new Date().toISOString();
+    const tempId = asActivityLogId(`optimistic-${++this.optimisticSeq}`);
+    this.activityLogs = [
+      ...logsBefore,
+      {
+        id: tempId,
+        workspaceId,
+        taskId: id,
+        completedDate: today,
+        note: null,
+        createdAt: now
+      }
+    ];
+    this.tasks = applyTaskStatus(tasksBefore, id, 'done', today, now);
+    this.recomputeDerived();
+
+    await this.queueWrite(`task:${taskId}`, () =>
+      this.withBusy(
+        async () => {
+          const infra = this.requireInfrastructure();
+          const log = await completeTask(
+            {
+              tasks: infra.tasks,
+              weeklyPool: infra.weeklyPool,
+              activityLogs: infra.activityLogs,
+              clock: infra.clock,
+              ids: infra.ids
+            },
+            { workspaceId, taskId: id, weekStart, completedDate: today }
+          );
+          this.activityLogs = this.activityLogs.map((item) =>
+            item.id === tempId ? log : item
+          );
+          this.recomputeDerived();
+        },
+        () => {
+          this.tasks = tasksBefore;
+          this.activityLogs = logsBefore;
+          this.recomputeDerived();
+          this.scheduleRefresh();
+        }
+      )
+    );
+  }
+
+  async setTaskStatus(
+    taskId: string,
+    status: TaskStatus,
+    doneDate: string | null = null
+  ): Promise<void> {
+    const id = asTaskId(taskId);
+    await this.persist(async (infra, workspaceId) => {
+      const saved = await setTaskStatusUseCase(
+        { tasks: infra.tasks, clock: infra.clock },
+        { workspaceId, taskId: id, status, doneDate }
+      );
+      this.tasks = this.upsert(this.tasks, saved);
+      this.recomputeDerived();
+    });
+  }
+
+  async changeTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
+    const workspaceId = this.workspace?.id;
+    if (workspaceId === undefined) return;
+    const id = asTaskId(taskId);
+    const weekStart = this.weekStart;
+    const end = endOfWeek(weekStart);
+    const today = this.today;
+    const tasksBefore = this.tasks;
+    const logsBefore = this.activityLogs;
+    const now = new Date().toISOString();
+    const entry = this.weekEntries.find((item) => item.taskId === id);
+    const canComplete = isWithinDateRange(today, weekStart, end);
+    const completedThisWeek = logsBefore.some(
+      (log) => log.taskId === id && isWithinDateRange(log.completedDate, weekStart, end)
+    );
+    const shouldComplete =
+      status === 'done' && entry !== undefined && canComplete && !completedThisWeek;
+    const tempId = asActivityLogId(`optimistic-${++this.optimisticSeq}`);
+
+    if (shouldComplete) {
+      this.activityLogs = [
+        ...logsBefore,
+        {
+          id: tempId,
+          workspaceId,
+          taskId: id,
+          completedDate: today,
+          note: null,
+          createdAt: now
+        }
+      ];
+      this.tasks = applyTaskStatus(tasksBefore, id, 'done', today, now);
+    } else {
+      if (status !== 'done') {
+        this.activityLogs = logsBefore.filter(
+          (log) =>
+            !(log.taskId === id && isWithinDateRange(log.completedDate, weekStart, end))
+        );
+      }
+      this.tasks = applyTaskStatus(tasksBefore, id, status, today, now);
+    }
+    this.recomputeDerived();
+
+    await this.queueWrite(`task:${taskId}`, () =>
+      this.withBusy(
+        async () => {
+          const infra = this.requireInfrastructure();
+          if (shouldComplete) {
+            const log = await completeTask(
+              {
+                tasks: infra.tasks,
+                weeklyPool: infra.weeklyPool,
+                activityLogs: infra.activityLogs,
+                clock: infra.clock,
+                ids: infra.ids
+              },
+              { workspaceId, taskId: id, weekStart, completedDate: today }
+            );
+            this.activityLogs = this.activityLogs.map((item) =>
+              item.id === tempId ? log : item
+            );
+          } else {
+            if (status !== 'done') {
+              await removeWeekCompletion(
+                { activityLogs: infra.activityLogs },
+                { workspaceId, taskId: id, weekStart }
+              );
+            }
+            const saved = await setTaskStatusUseCase(
+              { tasks: infra.tasks, clock: infra.clock },
+              { workspaceId, taskId: id, status }
+            );
+            this.tasks = this.upsert(this.tasks, saved);
+          }
+          this.recomputeDerived();
+        },
+        () => {
+          this.tasks = tasksBefore;
+          this.activityLogs = logsBefore;
+          this.recomputeDerived();
+          this.scheduleRefresh();
+        }
+      )
+    );
+  }
+
+  async addCategory(
+    parentId: Category['parentId'],
+    name: string,
+    importanceWeight: WeightGrade,
+    icon: string | null = null,
+    color: CategoryColor | null = null
+  ): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      const category = await createCategory(
+        {
+          categories: infra.categories,
+          topics: infra.topics,
+          tasks: infra.tasks,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        { workspaceId, parentId, name, icon, color, importanceWeight }
+      );
+      this.categories = this.upsert(this.categories, category);
+      this.recomputeDerived();
+    });
+  }
+
+  async importCategoryTree(input: ImportCategory): Promise<void> {
+    const createdCategories: Category[] = [];
+    const createdTopics: Topic[] = [];
+    const createdTasks: Task[] = [];
+
+    await this.persist(async (infra, workspaceId) => {
+      const dependencies = {
+        categories: infra.categories,
+        topics: infra.topics,
+        tasks: infra.tasks,
+        clock: infra.clock,
+        ids: infra.ids
+      };
+
+      async function createNode(
+        node: ImportCategory,
+        parentId: Category['parentId']
+      ): Promise<void> {
+        const category = await createCategory(dependencies, {
+          workspaceId,
+          parentId,
+          name: node.name,
+          icon: node.icon,
+          color: node.color,
+          importanceWeight: node.weight
+        });
+        createdCategories.push(category);
+        for (const item of node.topics) {
+          const topic = await createTopic(dependencies, {
+            workspaceId,
+            categoryId: category.id,
+            name: item.name
+          });
+          createdTopics.push(topic);
+          for (const task of item.tasks) {
+            createdTasks.push(
+              await createTask(dependencies, {
+                workspaceId,
+                topicId: topic.id,
+                title: task.title,
+                icon: task.icon,
+                taskWeight: task.weight
+              })
+            );
+          }
+        }
+        for (const child of node.subcategories) await createNode(child, category.id);
+      }
+
+      await createNode(input, null);
+    });
+
+    if (this.error === null) {
+      this.categories = [...this.categories, ...createdCategories];
+      this.topics = [...this.topics, ...createdTopics];
+      this.tasks = [...this.tasks, ...createdTasks];
+      this.recomputeDerived();
+    }
+  }
+
+  async addTopic(categoryId: Category['id'], name: string): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      const topic = await createTopic(
+        {
+          categories: infra.categories,
+          topics: infra.topics,
+          tasks: infra.tasks,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        { workspaceId, categoryId, name }
+      );
+      this.topics = this.upsert(this.topics, topic);
+      this.recomputeDerived();
+    });
+  }
+
+  async addTask(
+    topicId: Topic['id'],
+    title: string,
+    taskWeight: WeightGrade,
+    icon: string | null = null,
+    status: TaskStatus = 'todo',
+    doneDate: string | null = null
+  ): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      let task = await createTask(
+        {
+          categories: infra.categories,
+          topics: infra.topics,
+          tasks: infra.tasks,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        { workspaceId, topicId, title, icon, taskWeight }
+      );
+      if (status !== 'todo' || doneDate !== null) {
+        task = await setTaskStatusUseCase(
+          { tasks: infra.tasks, clock: infra.clock },
+          { workspaceId, taskId: task.id, status, doneDate }
+        );
+      }
+      this.tasks = this.upsert(this.tasks, task);
+      this.recomputeDerived();
+    });
+  }
+
+  async removeCategory(categoryId: string): Promise<void> {
+    const categoryIds = categoryDescendantIds(this.categories, asCategoryId(categoryId));
+    const topicIds = new Set(
+      this.topics
+        .filter((topic) => categoryIds.has(topic.categoryId))
+        .map((topic) => topic.id)
+    );
+    const taskIds = this.tasks
+      .filter((task) => topicIds.has(task.topicId))
+      .map((task) => task.id);
+
+    await this.persist(async (infra, workspaceId) => {
+      for (const taskId of taskIds) await infra.tasks.delete(workspaceId, taskId);
+      for (const topicId of topicIds) await infra.topics.delete(workspaceId, topicId);
+      for (const id of categoryIds) await infra.categories.delete(workspaceId, id);
+      this.categories = this.categories.filter((category) => !categoryIds.has(category.id));
+      this.topics = this.topics.filter((topic) => !topicIds.has(topic.id));
+      this.tasks = this.tasks.filter((task) => !taskIds.includes(task.id));
+      this.recomputeDerived();
+    });
+  }
+
+  async removeTopic(topicId: string): Promise<void> {
+    if (this.tasks.some((task) => task.topicId === topicId)) {
+      throw new Error('Remove tasks in this topic first.');
+    }
+    await this.persist(async (infra, workspaceId) => {
+      await infra.topics.delete(workspaceId, asTopicId(topicId));
+      this.topics = this.topics.filter((topic) => topic.id !== topicId);
+      this.recomputeDerived();
+    });
+  }
+
+  async removeTask(taskId: string): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      await infra.tasks.delete(workspaceId, asTaskId(taskId));
+      this.tasks = this.tasks.filter((task) => task.id !== taskId);
+      this.recomputeDerived();
+    });
+  }
+
+  async updateCategory(
+    categoryId: string,
+    name: string,
+    importanceWeight: WeightGrade,
+    icon: string | null = null,
+    color?: CategoryColor | null
+  ): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      const category = await updateCategory(
+        {
+          categories: infra.categories,
+          topics: infra.topics,
+          tasks: infra.tasks,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        { workspaceId, categoryId: asCategoryId(categoryId), name, icon, color, importanceWeight }
+      );
+      this.categories = this.upsert(this.categories, category);
+      this.recomputeDerived();
+    });
+  }
+
+  async updateTopic(topicId: string, name: string): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      const topic = await updateTopic(
+        {
+          categories: infra.categories,
+          topics: infra.topics,
+          tasks: infra.tasks,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        { workspaceId, topicId: asTopicId(topicId), name }
+      );
+      this.topics = this.upsert(this.topics, topic);
+      this.recomputeDerived();
+    });
+  }
+
+  async updateTask(
+    taskId: string,
+    title: string,
+    taskWeight: WeightGrade,
+    icon: string | null = null,
+    status: TaskStatus = 'todo',
+    doneDate: string | null = null
+  ): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      const id = asTaskId(taskId);
+      let task = await updateTask(
+        {
+          categories: infra.categories,
+          topics: infra.topics,
+          tasks: infra.tasks,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        { workspaceId, taskId: id, title, icon, taskWeight }
+      );
+      task = await setTaskStatusUseCase(
+        { tasks: infra.tasks, clock: infra.clock },
+        { workspaceId, taskId: id, status, doneDate }
+      );
+      this.tasks = this.upsert(this.tasks, task);
+      this.recomputeDerived();
+    });
+  }
+
+  async addMilestone(input: {
+    title: string;
+    scope: Milestone['scope'];
+    targetPercentage: number;
+    dueDate: IsoDate;
+  }): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      const milestone = await createMilestone(
+        {
+          milestones: infra.milestones,
+          categories: infra.categories,
+          topics: infra.topics,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        { workspaceId, ...input }
+      );
+      this.milestones = this.upsert(this.milestones, milestone);
+      this.recomputeDerived();
+    });
+  }
+
+  async updateMilestone(input: {
+    milestoneId: string;
+    title: string;
+    targetPercentage: number;
+    dueDate: IsoDate;
+  }): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      const milestone = await updateMilestone(
+        {
+          milestones: infra.milestones,
+          categories: infra.categories,
+          topics: infra.topics,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        {
+          workspaceId,
+          milestoneId: asMilestoneId(input.milestoneId),
+          title: input.title,
+          targetPercentage: input.targetPercentage,
+          dueDate: input.dueDate
+        }
+      );
+      this.milestones = this.upsert(this.milestones, milestone);
+      this.recomputeDerived();
+    });
+  }
+
+  async removeMilestone(milestoneId: string): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      await deleteMilestone(
+        {
+          milestones: infra.milestones,
+          categories: infra.categories,
+          topics: infra.topics,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        { workspaceId, milestoneId: asMilestoneId(milestoneId) }
+      );
+      this.milestones = this.milestones.filter(
+        (milestone) => milestone.id !== milestoneId
+      );
+      this.recomputeDerived();
+    });
+  }
+
+  categoryForTopic(topic: Topic | undefined): Category | undefined {
+    return this.categories.find((category) => category.id === topic?.categoryId);
+  }
+
+  topicForTask(task: Task): Topic | undefined {
+    return this.topics.find((topic) => topic.id === task.topicId);
+  }
+
+  tasksForTopic(topicId: string): readonly Task[] {
+    return this.tasks.filter((task) => task.topicId === topicId);
+  }
+
+  entriesWithTask(): readonly { entry: WeeklyPoolEntry; task: Task }[] {
+    const taskById = new Map(this.tasks.map((task) => [task.id, task]));
+    return this.weekEntries.flatMap((entry) => {
+      const task = taskById.get(entry.taskId);
+      return task === undefined ? [] : [{ entry, task }];
+    });
+  }
+
+  completedTaskIdsForWeek(): ReadonlySet<string> {
+    const end = endOfWeek(this.weekStart);
+    return new Set(
+      this.activityLogs
+        .filter((log) => isWithinDateRange(log.completedDate, this.weekStart, end))
+        .map((log) => log.taskId)
+    );
+  }
+
+  clearError(): void {
+    this.error = null;
+  }
+
+  clearErrorOnInput(): void {
+    if (this.error !== null) this.error = null;
+  }
+
+  private async initialize(): Promise<void> {
+    try {
+      this.infrastructure = createAppwriteInfrastructureFromEnv({
+        PUBLIC_APPWRITE_ENDPOINT,
+        PUBLIC_APPWRITE_PROJECT_ID,
+        PUBLIC_APPWRITE_DATABASE_ID
+      });
+      const user = await this.infrastructure.auth.getCurrentUser();
+      if (user === null) {
+        this.session = 'signed-out';
+      } else {
+        this.user = user;
+        this.session = 'signed-in';
+        await this.loadWorkspaces();
+      }
+    } catch (error) {
+      this.error = messageFor(error);
+      this.session = 'signed-out';
+    } finally {
+      this.initialized = true;
+    }
+  }
+
+  private async loadWorkspaces(): Promise<void> {
+    const infra = this.requireInfrastructure();
+    const user = this.requireUser();
+    this.workspaces = await infra.workspaces.listByOwner(user.id);
+    if (this.workspaces.length === 0) {
+      await this.createWorkspace('My workspace');
+      return;
+    }
+    const first = this.workspaces[0];
+    if (first !== undefined) {
+      this.workspace = first;
+      await this.refresh();
+    }
+  }
+
+  private async reload(token: number): Promise<void> {
+    const infra = this.requireInfrastructure();
+    const workspaceId = this.workspace?.id;
+    if (workspaceId === undefined) return;
+    this.today = toIsoDate(infra.clock.now());
+    const [categories, topics, tasks, milestones, activityLogs] = await Promise.all([
+      infra.categories.listByWorkspace(workspaceId),
+      infra.topics.listByWorkspace(workspaceId),
+      infra.tasks.listByWorkspace(workspaceId),
+      infra.milestones.listByWorkspace(workspaceId),
+      infra.activityLogs.listByWorkspace(workspaceId)
+    ]);
+    if (token !== this.loadToken) return;
+
+    this.categories = categories;
+    this.topics = topics;
+    this.tasks = tasks;
+    this.milestones = milestones;
+    this.activityLogs = activityLogs;
+    await this.loadWeek(token);
+  }
+
+  private async loadWeek(token: number): Promise<void> {
+    const infra = this.requireInfrastructure();
+    const workspaceId = this.workspace?.id;
+    if (workspaceId === undefined) return;
+
+    const entries = await infra.weeklyPool.listByWeek(workspaceId, this.weekStart);
+    if (token !== this.loadToken) return;
+    this.weekEntries = entries;
+    this.recomputeDerived();
+  }
+
+  private recomputeDerived(): void {
+    this.recommendation = recommendStudyTasks({
+      weekStart: this.weekStart,
+      today: this.today,
+      poolEntries: this.weekEntries,
+      tasks: this.tasks,
+      topics: this.topics,
+      categories: this.categories,
+      activityLogs: this.activityLogs
+    });
+    this.milestoneProgress = this.milestones.map((milestone) =>
+      calculateMilestoneProgress({
+        milestone,
+        today: this.today,
+        categories: this.categories,
+        topics: this.topics,
+        tasks: this.tasks,
+        activityLogs: this.activityLogs
+      })
+    );
+  }
+
+  private queueWrite(key: string, run: () => Promise<void>): Promise<void> {
+    const previous = this.writeQueue.get(key) ?? Promise.resolve();
+    const next = previous.then(run, run);
+    this.writeQueue.set(key, next);
+    void next.then(
+      () => {
+        if (this.writeQueue.get(key) === next) this.writeQueue.delete(key);
+      },
+      () => {
+        if (this.writeQueue.get(key) === next) this.writeQueue.delete(key);
+      }
+    );
+    return next;
+  }
+
+  private async persist(
+    operation: (infra: Infrastructure, workspaceId: Workspace['id']) => Promise<void>
+  ): Promise<void> {
+    const workspaceId = this.workspace?.id;
+    if (workspaceId === undefined) {
+      this.error = 'Select a workspace first.';
+      return;
+    }
+    await this.queueWrite(`persist:${workspaceId}`, () =>
+      this.withBusy(
+        () => operation(this.requireInfrastructure(), workspaceId),
+        () => this.scheduleRefresh()
+      )
+    );
+  }
+
+  private scheduleRefresh(): void {
+    if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      if (this.workspace === null) return;
+      const token = ++this.loadToken;
+      void this.reload(token).catch(() => {});
+    }, 600);
+  }
+
+  private replaceEntry(entry: WeeklyPoolEntry): void {
+    const exists = this.weekEntries.some((item) => item.id === entry.id);
+    this.weekEntries = exists
+      ? this.weekEntries.map((item) => (item.id === entry.id ? entry : item))
+      : [...this.weekEntries, entry];
+  }
+
+  private upsert<T extends { readonly id: string }>(
+    list: readonly T[],
+    item: T
+  ): readonly T[] {
+    return list.some((entry) => entry.id === item.id)
+      ? list.map((entry) => (entry.id === item.id ? item : entry))
+      : [...list, item];
+  }
+
+  private async withBusy(
+    operation: () => Promise<void>,
+    onError?: () => void
+  ): Promise<void> {
+    this.busy = true;
+    this.error = null;
+    try {
+      await operation();
+    } catch (error) {
+      this.error = messageFor(error);
+      onError?.();
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private requireInfrastructure(): Infrastructure {
+    if (this.infrastructure === null) throw new Error('App is not configured. Check the Appwrite environment variables.');
+    return this.infrastructure;
+  }
+
+  private requireUser(): AuthenticatedUser {
+    if (this.user === null) throw new Error('Authentication is required.');
+    return this.user;
+  }
+
+  private clearWorkspaceData(): void {
+    this.categories = [];
+    this.topics = [];
+    this.tasks = [];
+    this.milestones = [];
+    this.milestoneProgress = [];
+    this.activityLogs = [];
+    this.weekEntries = [];
+    this.recommendation = EMPTY_RECOMMENDATION;
+  }
+}
+
+
+
+function messageFor(error: unknown): string {
+  return error instanceof Error ? error.message : 'Something went wrong.';
+}
+
+export const app = new AppStore();

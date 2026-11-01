@@ -1,0 +1,187 @@
+import { addDays, daysBetween, endOfWeek, isWithinDateRange } from '../../domain/algorithms/week';
+import type { IsoDate, WeekStart } from '../../domain/models/common';
+import type { TaskId, WeeklyPoolEntryId, WorkspaceId } from '../../domain/models/identifiers';
+import { asWeeklyPoolEntryId } from '../../domain/models/identifiers';
+import type { WeeklyPoolEntry } from '../../domain/models/planning';
+import type { ActivityLogRepository } from '../../domain/ports/activity-log-repository';
+import type { ClockPort } from '../../domain/ports/clock-port';
+import type { IdGeneratorPort } from '../../domain/ports/id-generator-port';
+import type { TaskRepository } from '../../domain/ports/task-repository';
+import type { WeeklyPoolRepository } from '../../domain/ports/weekly-pool-repository';
+import { ConflictError, NotFoundError, ValidationError } from '../errors';
+import { requireIsoDate, requireWeekStart } from '../validation';
+
+export interface PlanningDependencies {
+  readonly weeklyPool: WeeklyPoolRepository;
+  readonly tasks: TaskRepository;
+  readonly activityLogs: ActivityLogRepository;
+  readonly clock: ClockPort;
+  readonly ids: IdGeneratorPort;
+}
+
+export interface AddTaskToWeekInput {
+  readonly workspaceId: WorkspaceId;
+  readonly taskId: TaskId;
+  readonly weekStart: WeekStart;
+  readonly plannedDate?: IsoDate | null;
+}
+
+export async function addTaskToWeek(
+  deps: PlanningDependencies,
+  input: AddTaskToWeekInput
+): Promise<WeeklyPoolEntry> {
+  const weekStart = requireWeekStart(input.weekStart, 'Week start');
+  const plannedDate = input.plannedDate ?? null;
+  if (plannedDate !== null) requireDateInWeek(plannedDate, weekStart);
+
+  const task = await deps.tasks.findById(input.workspaceId, input.taskId);
+  if (task === null) throw new NotFoundError('Task not found.');
+
+  const existing = await deps.weeklyPool.listByTask(input.workspaceId, input.taskId);
+  if (existing.length > 0) {
+    throw new ConflictError('Task is already assigned to a week.');
+  }
+
+  return deps.weeklyPool.save({
+    id: asWeeklyPoolEntryId(deps.ids.next()),
+    workspaceId: input.workspaceId,
+    taskId: input.taskId,
+    weekStart,
+    plannedDate,
+    createdAt: deps.clock.now().toISOString(),
+  });
+}
+
+export interface MoveWeeklyPoolEntryInput {
+  readonly workspaceId: WorkspaceId;
+  readonly entryId: WeeklyPoolEntryId;
+  readonly weekStart: WeekStart;
+}
+
+export async function moveWeeklyPoolEntry(
+  deps: PlanningDependencies,
+  input: MoveWeeklyPoolEntryInput
+): Promise<WeeklyPoolEntry> {
+  const weekStart = requireWeekStart(input.weekStart, 'Week start');
+
+  const entry = await deps.weeklyPool.findById(input.workspaceId, input.entryId);
+  if (entry === null) throw new NotFoundError('Weekly pool entry not found.');
+  if (entry.weekStart === weekStart) return entry;
+
+  const targetEntries = await deps.weeklyPool.listByWeek(input.workspaceId, weekStart);
+  if (targetEntries.some((candidate) => candidate.taskId === entry.taskId)) {
+    throw new ConflictError('Task is already assigned to the target week.');
+  }
+
+  return deps.weeklyPool.save({
+    ...entry,
+    weekStart,
+    plannedDate:
+      entry.plannedDate === null
+        ? null
+        : addDays(entry.plannedDate, daysBetween(entry.weekStart, weekStart))
+  });
+}
+
+export interface ScheduleWeeklyPoolEntryInput {
+  readonly workspaceId: WorkspaceId;
+  readonly entryId: WeeklyPoolEntryId;
+  readonly plannedDate: IsoDate | null;
+}
+
+export async function scheduleWeeklyPoolEntry(
+  deps: PlanningDependencies,
+  input: ScheduleWeeklyPoolEntryInput
+): Promise<WeeklyPoolEntry> {
+  const entry = await deps.weeklyPool.findById(input.workspaceId, input.entryId);
+  if (entry === null) throw new NotFoundError('Weekly pool entry not found.');
+  if (input.plannedDate !== null) requireDateInWeek(input.plannedDate, entry.weekStart);
+  if (entry.plannedDate === input.plannedDate) return entry;
+  return deps.weeklyPool.save({ ...entry, plannedDate: input.plannedDate });
+}
+
+export interface RemoveWeeklyPoolEntryInput {
+  readonly workspaceId: WorkspaceId;
+  readonly entryId: WeeklyPoolEntryId;
+}
+
+export async function removeWeeklyPoolEntry(
+  deps: PlanningDependencies,
+  input: RemoveWeeklyPoolEntryInput
+): Promise<void> {
+  const entry = await deps.weeklyPool.findById(input.workspaceId, input.entryId);
+  if (entry === null) throw new NotFoundError('Weekly pool entry not found.');
+  await deps.weeklyPool.delete(input.workspaceId, input.entryId);
+}
+
+export interface WeekRolloverPreview {
+  readonly incomplete: readonly WeeklyPoolEntry[];
+  readonly completed: readonly WeeklyPoolEntry[];
+}
+
+export async function previewWeekRollover(
+  deps: PlanningDependencies,
+  input: { readonly workspaceId: WorkspaceId; readonly weekStart: WeekStart }
+): Promise<WeekRolloverPreview> {
+  const weekStart = requireWeekStart(input.weekStart, 'Week start');
+  const entries = await deps.weeklyPool.listByWeek(input.workspaceId, weekStart);
+  const logs = await deps.activityLogs.listByDateRange(
+    input.workspaceId,
+    weekStart,
+    endOfWeek(weekStart)
+  );
+  const completedTaskIds = new Set(logs.map((log) => log.taskId));
+
+  return {
+    incomplete: entries.filter((entry) => !completedTaskIds.has(entry.taskId)),
+    completed: entries.filter((entry) => completedTaskIds.has(entry.taskId)),
+  };
+}
+
+export interface RolloverWeekInput {
+  readonly workspaceId: WorkspaceId;
+  readonly fromWeekStart: WeekStart;
+  readonly toWeekStart: WeekStart;
+}
+
+export async function rolloverWeek(
+  deps: PlanningDependencies,
+  input: RolloverWeekInput
+): Promise<readonly WeeklyPoolEntry[]> {
+  const fromWeekStart = requireWeekStart(input.fromWeekStart, 'Source week start');
+  const toWeekStart = requireWeekStart(input.toWeekStart, 'Target week start');
+  if (toWeekStart <= fromWeekStart) {
+    throw new ValidationError('Tasks can only be rolled forward.');
+  }
+
+  const preview = await previewWeekRollover(deps, {
+    workspaceId: input.workspaceId,
+    weekStart: fromWeekStart,
+  });
+  const targetEntries = await deps.weeklyPool.listByWeek(input.workspaceId, toWeekStart);
+  const targetTaskIds = new Set(targetEntries.map((entry) => entry.taskId));
+
+  const moved: WeeklyPoolEntry[] = [];
+  // shortcut: moves are sequential; Phase 3 should wrap this in a backend transaction.
+  const dayOffset = daysBetween(fromWeekStart, toWeekStart);
+  for (const entry of preview.incomplete) {
+    if (targetTaskIds.has(entry.taskId)) continue;
+    moved.push(
+      await deps.weeklyPool.save({
+        ...entry,
+        weekStart: toWeekStart,
+        plannedDate: entry.plannedDate === null ? null : addDays(entry.plannedDate, dayOffset)
+      })
+    );
+  }
+
+  return moved;
+}
+
+function requireDateInWeek(value: IsoDate, weekStart: WeekStart): IsoDate {
+  const date = requireIsoDate(value, 'Planned date');
+  if (!isWithinDateRange(date, weekStart, endOfWeek(weekStart))) {
+    throw new ValidationError('Planned date must fall within the selected week.');
+  }
+  return date;
+}

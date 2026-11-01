@@ -1,0 +1,42 @@
+{
+  "name": "neurelium",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "db:setup": "bun run scripts/setup-appwrite.ts",
+    "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "prepare": "svelte-kit sync || echo ''",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+  },
+  "devDependencies": {
+    "@internationalized/date": "^3.12.0",
+    "@sveltejs/adapter-static": "^4.0.1",
+    "@sveltejs/kit": "^3.0.0",
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/bun": "^1.4.4",
+    "bits-ui": "^2.20.0",
+    "cn": "^0.5.0",
+    "node-appwrite": "^31.1.0",
+    "svelte": "^5.57.1",
+    "svelte-check": "^4.6.0",
+    "tailwind-variants": "^3.3.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.0"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.65.0",
+    "appwrite": "^29.2.0"
+  },
+  "version": "0.0.1",
+  "imports": {
+    "#lib": "./src/lib/index.js",
+    "#lib/*": "./src/lib/*"
+  }
+}
