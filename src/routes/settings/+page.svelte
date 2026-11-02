@@ -10,6 +10,7 @@
     ChevronRight,
     RotateCcw,
     Settings,
+    Trash2,
     UserRound,
     UserPlus,
     Users
@@ -71,6 +72,18 @@
       /* storage can be unavailable in private mode */
     }
     if (app.workspaces[0] !== undefined) await app.selectWorkspace(app.workspaces[0].id);
+  }
+
+  async function deleteWorkspace() {
+    if (app.workspace === null) return;
+    const confirmed = await askConfirm({
+      title: `Delete “${app.workspace.name}”?`,
+      description:
+        'This permanently deletes the workspace, its categories, tasks, week plans, logs, and members.',
+      confirmLabel: 'Delete workspace',
+      destructive: true
+    });
+    if (confirmed) await app.deleteWorkspace();
   }
 
   const selectClass =
@@ -270,6 +283,22 @@
       </a>
     </div>
   </section>
+
+  {#if app.workspaceRole === 'owner' && app.workspace !== null}
+    <section class="rounded-2xl border border-destructive/30 bg-card p-4 sm:p-5">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-semibold text-destructive">Delete workspace</h2>
+          <p class="mt-1 text-xs text-muted-foreground">
+            Permanently removes this workspace and all of its data.
+          </p>
+        </div>
+        <Button variant="destructive" onclick={deleteWorkspace} disabled={app.busy}>
+          <Trash2 class="size-4" /> Delete
+        </Button>
+      </div>
+    </section>
+  {/if}
 
   <section class="rounded-2xl border bg-card p-4 sm:p-5">
     <div class="flex flex-wrap items-center justify-between gap-3">

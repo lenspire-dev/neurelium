@@ -470,6 +470,49 @@ export class AppwriteWorkspaceRepository implements WorkspaceRepository {
     }
   }
 
+  async deleteWorkspace(workspace: Workspace): Promise<void> {
+    const userId = await this.currentUser.currentUserId();
+    if (workspace.ownerId !== userId) {
+      throw new Error('Only the workspace owner can delete a workspace.');
+    }
+    const tableIds = Object.values(APPWRITE_TABLES).filter(
+      (tableId) => tableId !== APPWRITE_TABLES.workspaces
+    );
+
+    for (const tableId of tableIds) {
+      while (true) {
+        let rows: StoredRow[];
+        try {
+          const page = await this.tables.listRows<StoredRow>({
+            databaseId: this.databaseId,
+            tableId,
+            queries: [Query.equal('workspaceId', workspace.id), Query.limit(PAGE_SIZE)]
+          });
+          rows = page.rows;
+        } catch (error) {
+          if (isNotFoundError(error)) break;
+          throw error;
+        }
+        if (rows.length === 0) break;
+
+        for (const row of rows) {
+          await this.tables.deleteRow({
+            databaseId: this.databaseId,
+            tableId,
+            rowId: row.$id
+          });
+        }
+        if (rows.length < PAGE_SIZE) break;
+      }
+    }
+
+    await this.tables.deleteRow({
+      databaseId: this.databaseId,
+      tableId: APPWRITE_TABLES.workspaces,
+      rowId: workspace.id
+    });
+  }
+
   private async listRows(filters: readonly string[]): Promise<readonly Workspace[]> {
     const rows: Workspace[] = [];
     let offset = 0;

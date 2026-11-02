@@ -29,6 +29,14 @@ export class AppwriteWorkspaceTeamAdapter implements WorkspaceTeamPort {
     }
   }
 
+  async renameTeam(workspace: Workspace): Promise<void> {
+    await this.teams.updateName({ teamId: workspace.id, name: workspace.name });
+  }
+
+  async deleteTeam(workspace: Workspace): Promise<void> {
+    await this.teams.delete({ teamId: workspace.id });
+  }
+
   async listMembers(workspace: Workspace): Promise<readonly WorkspaceMember[]> {
     const members: WorkspaceMember[] = [];
     let offset = 0;

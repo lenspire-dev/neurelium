@@ -7,4 +7,5 @@ export interface WorkspaceRepository {
   listAccessible(): Promise<readonly Workspace[]>;
   save(workspace: Workspace): Promise<Workspace>;
   migratePermissions(workspace: Workspace): Promise<void>;
+  deleteWorkspace(workspace: Workspace): Promise<void>;
 }

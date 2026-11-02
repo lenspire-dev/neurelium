@@ -3,6 +3,8 @@ import type { Workspace } from '../models/workspace';
 
 export interface WorkspaceTeamPort {
   ensureTeam(workspace: Workspace): Promise<boolean>;
+  renameTeam(workspace: Workspace): Promise<void>;
+  deleteTeam(workspace: Workspace): Promise<void>;
   listMembers(workspace: Workspace): Promise<readonly WorkspaceMember[]>;
   invite(
     workspace: Workspace,

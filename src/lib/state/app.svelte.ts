@@ -272,7 +272,13 @@ export class AppStore {
         createdAt: current.createdAt,
         updatedAt: infra.clock.now().toISOString()
       };
+      const created = await infra.team.ensureTeam(workspace);
       const saved = await infra.workspaces.save(workspace);
+      if (created) {
+        await infra.workspaces.migratePermissions(saved);
+      } else {
+        await infra.team.renameTeam(saved);
+      }
       this.workspace = saved;
       this.workspaces = this.workspaces.map((item) =>
         item.id === saved.id ? saved : item
@@ -365,6 +371,21 @@ export class AppStore {
           entityName: member.name || member.email
         });
       }
+    });
+  }
+
+  async deleteWorkspace(): Promise<void> {
+    if (this.workspace === null) return;
+    await this.withBusy(async () => {
+      const infra = this.requireInfrastructure();
+      const workspace = this.workspace!;
+      await infra.team.ensureTeam(workspace);
+      await infra.workspaces.deleteWorkspace(workspace);
+      await infra.team.deleteTeam(workspace);
+      this.workspace = null;
+      this.members = [];
+      this.clearWorkspaceData();
+      await this.loadWorkspaces();
     });
   }
 
