@@ -6,6 +6,7 @@
   import { formatWeek, formatWeekday } from '#lib/presentation/format.js';
   import { CATEGORY_COLOR_META, buildCategoryColorMap } from '#lib/presentation/category-color.js';
   import { categoryBalance, dailyCompletion } from '#lib/presentation/dashboard.js';
+  import { taskDisplayName } from '#lib/presentation/task-display.js';
   import { endOfWeek, isWithinDateRange } from '#lib/domain/algorithms/week.js';
   import { asCategoryId } from '#lib/domain/models/identifiers.js';
   import type { Task } from '#lib/domain/models/hierarchy.js';
@@ -74,6 +75,11 @@
       : categoryColor(topic.categoryId);
   }
 
+  function taskCategoryName(task: Task): string {
+    const topic = app.topicForTask(task);
+    return app.categories.find((category) => category.id === topic?.categoryId)?.name ?? 'Topic';
+  }
+
   async function complete(taskId: string) {
     await app.completeTask(taskId);
   }
@@ -119,7 +125,7 @@
         {#if primary}
           <h2 class="mt-3 flex items-center gap-2 text-xl font-semibold leading-tight">
             {#if primary.task.icon !== null}<span aria-hidden="true">{primary.task.icon}</span>{/if}
-            <span>{primary.task.title}</span>
+            <span>{taskDisplayName(primary.task, primary.topic)}</span>
           </h2>
           <div class="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <span class="flex items-center gap-1.5">
@@ -127,7 +133,7 @@
                 class="size-2.5 shrink-0 rounded-full {categoryColor(primary.category.id).dotClass}"
                 aria-hidden="true"
               ></span>
-              {primary.category.name} · {primary.topic.name}
+              {primary.category.name}
             </span>
             <WeightBadge value={primary.task.taskWeight} />
           </div>
@@ -268,10 +274,10 @@
                       aria-hidden="true"
                     ></span>
                     {#if item.task.icon !== null}<span aria-hidden="true">{item.task.icon}</span>{/if}
-                    <span class="truncate">{item.task.title}</span>
+                    <span class="truncate">{taskDisplayName(item.task, app.topicForTask(item.task))}</span>
                   </span>
                   <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span class="truncate">{app.topicForTask(item.task)?.name ?? 'Topic'}</span>
+                    <span class="truncate">{taskCategoryName(item.task)}</span>
                     <WeightBadge value={item.task.taskWeight} />
                   </span>
                 </span>

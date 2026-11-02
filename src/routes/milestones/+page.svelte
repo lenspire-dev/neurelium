@@ -9,6 +9,7 @@
   import MilestoneCard from '#lib/components/milestone-card.svelte';
   import MilestoneDetail from '#lib/components/milestone-detail.svelte';
   import WeightBadge from '#lib/components/weight-badge.svelte';
+  import { taskDisplayName } from '#lib/presentation/task-display.js';
   import { formatDate, formatPercent } from '#lib/presentation/format.js';
   import {
     CATEGORY_COLOR_META,
@@ -350,7 +351,12 @@
           {#each focusView.nextTasks as task (task.id)}
             <div class="flex min-h-10 items-center gap-2 rounded-lg border bg-background py-1 pl-2 pr-1">
               <WeightBadge value={task.taskWeight} />
-              <span class="max-w-52 truncate text-sm" title={task.title}>{task.title}</span>
+              <span
+                class="max-w-52 truncate text-sm"
+                title={taskDisplayName(task, app.topicForTask(task))}
+              >
+                {taskDisplayName(task, app.topicForTask(task))}
+              </span>
               {#if currentWeekTaskIds.has(task.id)}
                 <span
                   class="grid size-10 place-items-center text-muted-foreground"
@@ -365,7 +371,7 @@
                   variant="ghost"
                   size="icon"
                   class="size-10"
-                  aria-label="Add {task.title} to this week"
+                  aria-label="Add {taskDisplayName(task, app.topicForTask(task))} to this week"
                   title="Add to this week"
                   disabled={app.busy}
                   onclick={() => app.addTaskToCurrentWeek(task.id)}

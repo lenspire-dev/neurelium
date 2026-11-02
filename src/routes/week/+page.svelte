@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from '#lib/state/app.svelte.js';
   import WeightBadge from '#lib/components/weight-badge.svelte';
+  import TaskFilterBar from '#lib/components/task-filter-bar.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { Input } from '#lib/components/ui/input/index.js';
   import { Progress } from '#lib/components/ui/progress/index.js';
@@ -9,6 +10,7 @@
   import {
     filterTasks,
     taskComparator,
+    type SortDirection,
     type TaskFilterStatus,
     type TaskFilterWeight,
     type TaskSortKey
@@ -16,6 +18,7 @@
   import { cn } from '#lib/utils.js';
   import { CATEGORY_COLOR_META, buildCategoryColorMap } from '#lib/presentation/category-color.js';
   import { categoryPath } from '#lib/presentation/tree.js';
+  import { taskDisplayName } from '#lib/presentation/task-display.js';
   import { draggable, type DragPayload } from '#lib/actions/touch-dnd.js';
   import {
     addDays,
@@ -45,7 +48,8 @@
 
   let view = $state<'day' | 'week'>('day');
   let selectedDate = $state<IsoDate>(app.today);
-  let taskSort = $state<TaskSortKey>('title');
+  let taskSort = $state<TaskSortKey>('created');
+  let taskSortDirection = $state<SortDirection>('desc');
   let taskFilterStatus = $state<TaskFilterStatus>('all');
   let taskFilterWeight = $state<TaskFilterWeight>('all');
   let taskQuery = $state('');
@@ -57,7 +61,7 @@
     query: taskQuery
   });
   let visiblePool = $derived.by(() => {
-    const compare = taskComparator(taskSort);
+    const compare = taskComparator(taskSort, taskSortDirection);
     return pool
       .filter((item) => filterTasks([item.task], taskFilters).length > 0)
       .sort((a, b) => compare(a.task, b.task));
@@ -101,10 +105,9 @@
   function taskBreadcrumb(task: Task): string {
     const topic = app.topicForTask(task);
     if (topic === undefined) return 'Topic';
-    return [
-      ...categoryPath(topic.categoryId, app.categories).map((category) => category.name),
-      topic.name
-    ].join(' › ');
+    return categoryPath(topic.categoryId, app.categories)
+      .map((category) => category.name)
+      .join(' › ');
   }
 
   function taskColor(task: Task) {
@@ -183,9 +186,12 @@
       </button>
       <div class="min-w-0 flex-1 py-0.5">
         <div class="flex min-w-0 items-center gap-1.5">
-          <p class="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-medium" title={item.task.title}>
+          <p
+            class="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-medium"
+            title={taskDisplayName(item.task, app.topicForTask(item.task))}
+          >
             {#if item.task.icon !== null}<span aria-hidden="true">{item.task.icon}</span>{/if}
-            <span class="truncate">{item.task.title}</span>
+            <span class="truncate">{taskDisplayName(item.task, app.topicForTask(item.task))}</span>
           </p>
           <WeightBadge value={item.task.taskWeight} />
         </div>
@@ -376,42 +382,14 @@
     </div>
   </header>
 
-  <div class="flex flex-wrap items-center gap-1.5 rounded-xl border bg-card p-2">
-    <span class="px-1 text-xs font-medium text-muted-foreground">Sort & filter</span>
-    <select
-      class="h-10 rounded-lg border bg-background px-2 text-xs"
-      aria-label="Sort tasks"
-      bind:value={taskSort}
-    >
-      <option value="title">Task title</option>
-      <option value="created">Newest task</option>
-      <option value="updated">Recently updated</option>
-      <option value="weight">Task weight</option>
-      <option value="status">Status</option>
-      <option value="done">Done date</option>
-    </select>
-    <select
-      class="h-10 rounded-lg border bg-background px-2 text-xs"
-      aria-label="Filter by task status"
-      bind:value={taskFilterStatus}
-    >
-      <option value="all">All statuses</option>
-      {#each TASK_STATUS_META as meta (meta.value)}
-        <option value={meta.value}>{meta.label}</option>
-      {/each}
-    </select>
-    <select
-      class="h-10 rounded-lg border bg-background px-2 text-xs"
-      aria-label="Filter by task weight"
-      bind:value={taskFilterWeight}
-    >
-      <option value="all">All weights</option>
-      {#each [1, 2, 3, 4, 5] as weight (weight)}
-        <option value={weight}>Weight {weight}</option>
-      {/each}
-    </select>
-    <Input class="h-10 w-44" aria-label="Search tasks" placeholder="Search tasks" bind:value={taskQuery} />
-  </div>
+  <TaskFilterBar
+    bind:sort={taskSort}
+    bind:direction={taskSortDirection}
+    bind:status={taskFilterStatus}
+    bind:weight={taskFilterWeight}
+    bind:query={taskQuery}
+    resultCount={visiblePool.length}
+  />
 
   {@render weekTodoSection()}
 

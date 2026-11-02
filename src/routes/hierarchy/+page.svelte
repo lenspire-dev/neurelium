@@ -10,6 +10,7 @@
   import WeightBadge from '#lib/components/weight-badge.svelte';
   import WeightPicker from '#lib/components/weight-picker.svelte';
   import TaskStatusBadge from '#lib/components/task-status-badge.svelte';
+  import TaskFilterBar from '#lib/components/task-filter-bar.svelte';
   import {
     CATEGORY_COLOR_META,
     buildCategoryColorMap,
@@ -25,6 +26,7 @@
     sortTasks,
     sortTopics,
     type CategorySortKey,
+    type SortDirection,
     type TaskFilterStatus,
     type TaskFilterWeight,
     type TaskSortKey,
@@ -81,7 +83,8 @@
 
   let categorySort = $state<CategorySortKey>('name');
   let topicSort = $state<TopicSortKey>('name');
-  let taskSort = $state<TaskSortKey>('title');
+  let taskSort = $state<TaskSortKey>('created');
+  let taskSortDirection = $state<SortDirection>('desc');
   let taskFilterStatus = $state<TaskFilterStatus>('all');
   let taskFilterWeight = $state<TaskFilterWeight>('all');
   let taskQuery = $state('');
@@ -123,6 +126,7 @@
     weight: taskFilterWeight,
     query: taskQuery
   });
+  let filteredTaskCount = $derived(filterTasks(app.tasks, taskFilters).length);
 
   function selectCategory(category: Category) {
     selectedId = category.id;
@@ -368,7 +372,11 @@
   }
 
   function visibleTasks(topicId: string): Task[] {
-    return sortTasks(filterTasks(app.tasksForTopic(topicId), taskFilters), taskSort);
+    return sortTasks(
+      filterTasks(app.tasksForTopic(topicId), taskFilters),
+      taskSort,
+      taskSortDirection
+    );
   }
 </script>
 
@@ -405,7 +413,7 @@
     </div>
   {:else}
     <div class="flex flex-wrap items-center gap-1.5 rounded-xl border bg-card p-2">
-      <span class="px-1 text-xs font-medium text-muted-foreground">Sort & filter</span>
+      <span class="px-1 text-xs font-medium text-muted-foreground">Structure</span>
       <select
         class="h-10 rounded-lg border bg-background px-2 text-xs"
         aria-label="Sort categories"
@@ -423,40 +431,16 @@
         <option value="name">Topic name</option>
         <option value="created">Newest topic</option>
       </select>
-      <select
-        class="h-10 rounded-lg border bg-background px-2 text-xs"
-        aria-label="Sort tasks"
-        bind:value={taskSort}
-      >
-        <option value="title">Task title</option>
-        <option value="created">Newest task</option>
-        <option value="updated">Recently updated</option>
-        <option value="weight">Task weight</option>
-        <option value="status">Status</option>
-        <option value="done">Done date</option>
-      </select>
-      <select
-        class="h-10 rounded-lg border bg-background px-2 text-xs"
-        aria-label="Filter by task status"
-        bind:value={taskFilterStatus}
-      >
-        <option value="all">All statuses</option>
-        {#each TASK_STATUS_META as meta (meta.value)}
-          <option value={meta.value}>{meta.label}</option>
-        {/each}
-      </select>
-      <select
-        class="h-10 rounded-lg border bg-background px-2 text-xs"
-        aria-label="Filter by task weight"
-        bind:value={taskFilterWeight}
-      >
-        <option value="all">All weights</option>
-        {#each [1, 2, 3, 4, 5] as weight (weight)}
-          <option value={weight}>Weight {weight}</option>
-        {/each}
-      </select>
-      <Input class="h-10 w-44" aria-label="Search tasks" placeholder="Search tasks" bind:value={taskQuery} />
     </div>
+
+    <TaskFilterBar
+      bind:sort={taskSort}
+      bind:direction={taskSortDirection}
+      bind:status={taskFilterStatus}
+      bind:weight={taskFilterWeight}
+      bind:query={taskQuery}
+      resultCount={filteredTaskCount}
+    />
 
     <div class="grid gap-4 lg:grid-cols-[20rem_1fr]">
       <section class={mobileDetail ? 'hidden lg:block' : ''} aria-label="Category tree">

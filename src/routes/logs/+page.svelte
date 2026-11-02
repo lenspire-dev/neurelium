@@ -3,6 +3,7 @@
   import { Input } from '#lib/components/ui/input/index.js';
   import { formatDate, formatLongDate, formatTimestamp } from '#lib/presentation/format.js';
   import { CATEGORY_COLOR_META, buildCategoryColorMap } from '#lib/presentation/category-color.js';
+  import { taskDisplayName } from '#lib/presentation/task-display.js';
   import { endOfWeek, isWithinDateRange } from '#lib/domain/algorithms/week.js';
   import { History } from '@lucide/svelte';
 
@@ -13,12 +14,14 @@
   let logQuery = $state('');
 
   function taskTitle(taskId: string): string {
-    return app.tasks.find((task) => task.id === taskId)?.title ?? 'Deleted task';
+    const task = app.tasks.find((item) => item.id === taskId);
+    return task === undefined ? 'Deleted task' : taskDisplayName(task, app.topicForTask(task));
   }
 
-  function topicName(taskId: string): string {
+  function categoryName(taskId: string): string {
     const task = app.tasks.find((item) => item.id === taskId);
-    return task === undefined ? '' : (app.topicForTask(task)?.name ?? '');
+    const topic = task === undefined ? undefined : app.topicForTask(task);
+    return app.categories.find((category) => category.id === topic?.categoryId)?.name ?? '';
   }
 
   let topicChoices = $derived(
@@ -129,7 +132,7 @@
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-sm font-medium">{taskTitle(log.taskId)}</p>
                   <p class="truncate text-xs text-muted-foreground">
-                    {topicName(log.taskId)}{log.note ? ` · ${log.note}` : ''}
+                    {categoryName(log.taskId)}{log.note ? ` · ${log.note}` : ''}
                   </p>
                   <p class="truncate text-[11px] text-muted-foreground">
                     Recorded {formatTimestamp(log.createdAt)}
