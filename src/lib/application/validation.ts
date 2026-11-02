@@ -1,4 +1,8 @@
 import { isIsoDate, isWeekStart } from '../domain/algorithms/week';
+import {
+  isCategoryStatus,
+  type CategoryStatus
+} from '../domain/models/category-status';
 import { isCategoryColor, type CategoryColor } from '../domain/models/category-color';
 import type { IsoDate, WeekStart } from '../domain/models/common';
 import { isTaskStatus, type TaskStatus } from '../domain/models/task-status';
@@ -35,6 +39,17 @@ export function optionalCategoryColor(
   if (value === null || value === undefined || value === '') return null;
   if (!isCategoryColor(value)) {
     throw new ValidationError(`${field} must be a supported category color.`);
+  }
+  return value;
+}
+
+export function optionalCategoryStatus(
+  value: string | null | undefined,
+  field: string
+): CategoryStatus | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (!isCategoryStatus(value)) {
+    throw new ValidationError(`${field} must be todo, in_progress, or done.`);
   }
   return value;
 }

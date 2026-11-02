@@ -26,6 +26,7 @@ import type {
   RecommendationResult
 } from '#lib/domain/models/analytics.js';
 import type { CategoryColor } from '#lib/domain/models/category-color.js';
+import type { CategoryStatus } from '#lib/domain/models/category-status.js';
 import type { IsoDate, WeekStart } from '#lib/domain/models/common.js';
 import type { ActivityLog } from '#lib/domain/models/execution.js';
 import type {
@@ -600,6 +601,90 @@ export class AppStore {
         contextName:
           this.categories.find((item) => item.id === category.parentId)?.name ?? null
       });
+    });
+  }
+
+  async setCategoryStatusOverride(
+    categoryId: string,
+    statusOverride: CategoryStatus | null
+  ): Promise<void> {
+    await this.persist(async (infra, workspaceId) => {
+      const category = await updateCategory(
+        {
+          categories: infra.categories,
+          topics: infra.topics,
+          tasks: infra.tasks,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        {
+          workspaceId,
+          categoryId: asCategoryId(categoryId),
+          statusOverride
+        }
+      );
+      this.categories = this.upsert(this.categories, category);
+      this.recomputeDerived();
+      await this.recordEvent({
+        action: 'updated',
+        entityType: 'category',
+        entityId: category.id,
+        entityName: category.name,
+        detail: statusOverride === null ? 'Automatic status' : `Status set to ${statusOverride}`
+      });
+    });
+  }
+
+  async addCategoryToCurrentWeek(categoryId: string): Promise<void> {
+    const id = asCategoryId(categoryId);
+    const category = this.categories.find((item) => item.id === id);
+    if (category === undefined) return;
+    const categoryIds = categoryDescendantIds(this.categories, id);
+    const topicIds = new Set(
+      this.topics
+        .filter((topic) => categoryIds.has(topic.categoryId))
+        .map((topic) => topic.id)
+    );
+    const categoryTasks = this.tasks.filter((task) => topicIds.has(task.topicId));
+
+    await this.persist(async (infra, workspaceId) => {
+      const existing = new Set(
+        this.weekEntries
+          .filter((entry) => entry.weekStart === this.weekStart)
+          .map((entry) => entry.taskId)
+      );
+      const created: WeeklyPoolEntry[] = [];
+      for (const task of categoryTasks) {
+        if (existing.has(task.id)) continue;
+        created.push(
+          await addTaskToWeek(
+            {
+              weeklyPool: infra.weeklyPool,
+              tasks: infra.tasks,
+              activityLogs: infra.activityLogs,
+              clock: infra.clock,
+              ids: infra.ids
+            },
+            {
+              workspaceId,
+              taskId: task.id,
+              weekStart: this.weekStart,
+              plannedDate: null
+            }
+          )
+        );
+      }
+      this.weekEntries = [...this.weekEntries, ...created];
+      this.recomputeDerived();
+      if (created.length > 0) {
+        await this.recordEvent({
+          action: 'scheduled',
+          entityType: 'category',
+          entityId: category.id,
+          entityName: category.name,
+          detail: `${created.length} ${created.length === 1 ? 'task' : 'tasks'} added to the week`
+        });
+      }
     });
   }
 

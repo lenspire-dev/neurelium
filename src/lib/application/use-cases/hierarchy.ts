@@ -5,6 +5,7 @@ import type {
   TopicId,
   WorkspaceId,
 } from '../../domain/models/identifiers';
+import type { CategoryStatus } from '../../domain/models/category-status';
 import type { CategoryColor } from '../../domain/models/category-color';
 import type { Category, Task, Topic } from '../../domain/models/hierarchy';
 import { DEFAULT_TASK_STATUS, type TaskStatus } from '../../domain/models/task-status';
@@ -21,6 +22,7 @@ import type { TopicRepository } from '../../domain/ports/topic-repository';
 import { NotFoundError, ValidationError } from '../errors';
 import {
   optionalCategoryColor,
+  optionalCategoryStatus,
   optionalIcon,
   optionalIsoDate,
   requireNonEmpty,
@@ -43,6 +45,7 @@ export interface CreateCategoryInput {
   readonly icon?: string | null;
   readonly color?: CategoryColor | null;
   readonly importanceWeight: number;
+  readonly statusOverride?: CategoryStatus | null;
 }
 
 export async function createCategory(
@@ -55,6 +58,10 @@ export async function createCategory(
   const importanceWeight = requireWeightGrade(
     input.importanceWeight,
     'Category importance weight'
+  );
+  const statusOverride = optionalCategoryStatus(
+    input.statusOverride,
+    'Category status override'
   );
 
   if (input.parentId !== null) {
@@ -71,6 +78,7 @@ export async function createCategory(
     icon,
     color,
     importanceWeight,
+    statusOverride,
     createdAt: now,
     updatedAt: now,
   });
@@ -83,6 +91,7 @@ export interface UpdateCategoryInput {
   readonly icon?: string | null;
   readonly color?: CategoryColor | null | undefined;
   readonly importanceWeight?: number;
+  readonly statusOverride?: CategoryStatus | null;
   readonly parentId?: CategoryId | null;
 }
 
@@ -107,6 +116,10 @@ export async function updateCategory(
     input.importanceWeight === undefined
       ? existing.importanceWeight
       : requireWeightGrade(input.importanceWeight, 'Category importance weight');
+  const statusOverride =
+    input.statusOverride === undefined
+      ? (existing.statusOverride ?? null)
+      : optionalCategoryStatus(input.statusOverride, 'Category status override');
 
   let parentId = existing.parentId;
   if (input.parentId !== undefined) {
@@ -136,6 +149,7 @@ export async function updateCategory(
     icon,
     color,
     importanceWeight,
+    statusOverride,
     updatedAt: deps.clock.now().toISOString(),
   });
 }

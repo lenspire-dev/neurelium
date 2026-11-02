@@ -1,5 +1,6 @@
 import type { IsoDate, IsoDateTime, Timestamps, WorkspaceScoped } from './common';
 import type { CategoryColor } from './category-color';
+import type { CategoryStatus } from './category-status';
 import type { CategoryId, TaskId, TopicId } from './identifiers';
 import type { TaskStatus } from './task-status';
 
@@ -12,6 +13,8 @@ export interface Category extends WorkspaceScoped, Timestamps {
   readonly icon: string | null;
   /** Relative importance, used by the recommendation algorithm. */
   readonly importanceWeight: number;
+  /** Manual status override; `null` uses the automatic task-derived status. */
+  readonly statusOverride?: CategoryStatus | null;
   /** Picked accent color. `null` inherits the nearest ancestor, or a stable fallback. */
   readonly color: CategoryColor | null;
 }

@@ -33,6 +33,7 @@ function categoryRow(id: string, workspaceId: string): StoredRow {
     icon: null,
     color: null,
     importanceWeight: 5,
+    statusOverride: null,
     createdAt: '2026-10-30T00:00:00.000Z',
     updatedAt: '2026-10-30T00:00:00.000Z'
   };
@@ -47,6 +48,7 @@ function category(id: string, workspaceId = workspace): Category {
     icon: null,
     color: null,
     importanceWeight: 5,
+    statusOverride: null,
     createdAt: '2026-10-30T00:00:00.000Z',
     updatedAt: '2026-10-30T00:00:00.000Z'
   };

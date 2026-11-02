@@ -130,6 +130,7 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
       optionalIcon('icon'),
       optionalColor('color'),
       number('importanceWeight'),
+      { key: 'statusOverride', type: 'varchar', size: 16, required: false },
       timestamp('createdAt'),
       timestamp('updatedAt')
     ],

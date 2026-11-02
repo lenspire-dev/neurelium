@@ -5,6 +5,7 @@ import {
   type ActivityEvent
 } from '../../domain/models/activity';
 import type { Milestone } from '../../domain/models/analytics';
+import { isCategoryStatus } from '../../domain/models/category-status';
 import { isCategoryColor, type CategoryColor } from '../../domain/models/category-color';
 import type { ActivityLog } from '../../domain/models/execution';
 import type { Category, Task, Topic } from '../../domain/models/hierarchy';
@@ -78,6 +79,7 @@ export function workspaceToData(workspace: Workspace): RowData {
 
 export function rowToCategory(row: StoredRow): Category {
   const parentId = nullableString(row, 'parentId');
+  const statusOverride = nullableString(row, 'statusOverride');
   return {
     id: asCategoryId(row.$id),
     workspaceId: asWorkspaceId(requiredString(row, 'workspaceId')),
@@ -86,6 +88,7 @@ export function rowToCategory(row: StoredRow): Category {
     icon: nullableString(row, 'icon'),
     color: nullableCategoryColor(row, 'color'),
     importanceWeight: normalizeWeightGrade(requiredNumber(row, 'importanceWeight')),
+    statusOverride: isCategoryStatus(statusOverride) ? statusOverride : null,
     createdAt: requiredString(row, 'createdAt'),
     updatedAt: requiredString(row, 'updatedAt')
   };
@@ -99,6 +102,7 @@ export function categoryToData(category: Category): RowData {
     icon: category.icon,
     color: category.color,
     importanceWeight: category.importanceWeight,
+    statusOverride: category.statusOverride,
     createdAt: category.createdAt,
     updatedAt: category.updatedAt
   };

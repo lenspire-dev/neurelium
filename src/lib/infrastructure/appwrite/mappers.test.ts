@@ -76,6 +76,7 @@ describe('row mappers', () => {
       icon: '📐',
       color: 'teal',
       importanceWeight: 5,
+      statusOverride: null,
       createdAt,
       updatedAt: createdAt
     };

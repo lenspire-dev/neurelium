@@ -18,6 +18,7 @@
     suggestCategoryColor
   } from '#lib/presentation/category-color.js';
   import { parseCategoryImport } from '#lib/presentation/json-import.js';
+import { calculateCategoryStatus } from '#lib/domain/algorithms/category-status.js';
   import { formatDate, formatTimestamp } from '#lib/presentation/format.js';
   import { TASK_STATUS_META } from '#lib/presentation/task-status.js';
   import {
@@ -39,6 +40,7 @@
     visibleCategoryRows
   } from '#lib/presentation/tree.js';
   import type { CategoryColor } from '#lib/domain/models/category-color.js';
+import type { CategoryStatus } from '#lib/domain/models/category-status.js';
   import { DEFAULT_WEIGHT_GRADE, normalizeWeightGrade, type WeightGrade } from '#lib/domain/models/weight.js';
   import type { TaskStatus } from '#lib/domain/models/task-status.js';
   import type { Category, Task, Topic } from '#lib/domain/models/hierarchy.js';
@@ -106,6 +108,16 @@
       null
   );
   let path = $derived(categoryPath(selected?.id ?? null, app.categories));
+  let selectedStatus = $derived(
+    selected === null
+      ? null
+      : calculateCategoryStatus({
+          categoryId: selected.id,
+          categories: app.categories,
+          topics: app.topics,
+          tasks: app.tasks
+        })
+  );
   let childCategories = $derived(
     app.categories
       .filter((category) => category.parentId === selected?.id)
@@ -527,10 +539,51 @@
                   <p class="mt-0.5 text-[11px] text-muted-foreground">
                     Created {formatTimestamp(selected.createdAt)}
                   </p>
+                  {#if selectedStatus !== null}
+                    <div class="mt-2 flex flex-wrap items-center gap-2">
+                      <TaskStatusBadge status={selectedStatus.status} />
+                      <span class="text-xs text-muted-foreground">
+                        {selectedStatus.completionPercentage}% · {selectedStatus.completedTasks}/{selectedStatus.totalTasks}
+                        done
+                      </span>
+                      {#if selectedStatus.overridden}
+                        <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                          Manual
+                        </span>
+                      {/if}
+                      <select
+                        class="h-9 rounded-md border bg-background px-2 text-xs"
+                        aria-label="Category status for {selected.name}"
+                        value={selected.statusOverride ?? 'auto'}
+                        disabled={app.busy}
+                        onchange={(event) =>
+                          app.setCategoryStatusOverride(
+                            selected!.id,
+                            (event.currentTarget as HTMLSelectElement).value === 'auto'
+                              ? null
+                              : ((event.currentTarget as HTMLSelectElement)
+                                  .value as CategoryStatus)
+                          )}
+                      >
+                        <option value="auto">Automatic</option>
+                        {#each TASK_STATUS_META.filter((meta) => meta.value !== 'skipped') as meta (meta.value)}
+                          <option value={meta.value}>{meta.label}</option>
+                        {/each}
+                      </select>
+                    </div>
+                  {/if}
                 </div>
                 <div class="flex flex-wrap gap-1.5">
                   <Button variant="outline" size="sm" onclick={() => openCategoryEdit(selected!)}>
                     <Pencil class="size-4" /> Edit
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={app.busy}
+                    onclick={() => app.addCategoryToCurrentWeek(selected!.id)}
+                  >
+                    <CalendarPlus class="size-4" /> Add to week
                   </Button>
                   <Button variant="outline" size="sm" onclick={() => openCategoryCreate(selected!.id)}>
                     <FolderPlus class="size-4" /> Subcategory
