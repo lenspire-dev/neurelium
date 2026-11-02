@@ -158,12 +158,15 @@ export function taskToData(task: Task): RowData {
 }
 
 export function rowToWeeklyPoolEntry(row: StoredRow): WeeklyPoolEntry {
+  const status = nullableString(row, 'status');
   return {
     id: asWeeklyPoolEntryId(row.$id),
     workspaceId: asWorkspaceId(requiredString(row, 'workspaceId')),
     taskId: asTaskId(requiredString(row, 'taskId')),
     weekStart: requiredString(row, 'weekStart'),
     plannedDate: nullableString(row, 'plannedDate'),
+    status: isTaskStatus(status) ? status : DEFAULT_TASK_STATUS,
+    completedDate: nullableString(row, 'completedDate'),
     createdAt: requiredString(row, 'createdAt')
   };
 }
@@ -174,17 +177,24 @@ export function weeklyPoolEntryToData(entry: WeeklyPoolEntry): RowData {
     taskId: entry.taskId,
     weekStart: entry.weekStart,
     plannedDate: entry.plannedDate,
+    status: entry.status,
+    completedDate: entry.completedDate,
     createdAt: entry.createdAt
   };
 }
 
 export function rowToActivityLog(row: StoredRow): ActivityLog {
+  const entryId = nullableString(row, 'entryId');
   return {
     id: asActivityLogId(row.$id),
     workspaceId: asWorkspaceId(requiredString(row, 'workspaceId')),
     taskId: asTaskId(requiredString(row, 'taskId')),
+    entryId: entryId === null ? null : asWeeklyPoolEntryId(entryId),
     completedDate: requiredString(row, 'completedDate'),
     note: nullableString(row, 'note'),
+    taskName: nullableString(row, 'taskName'),
+    topicName: nullableString(row, 'topicName'),
+    categoryName: nullableString(row, 'categoryName'),
     createdAt: requiredString(row, 'createdAt')
   };
 }
@@ -193,8 +203,12 @@ export function activityLogToData(log: ActivityLog): RowData {
   return {
     workspaceId: log.workspaceId,
     taskId: log.taskId,
+    entryId: log.entryId,
     completedDate: log.completedDate,
     note: log.note,
+    taskName: log.taskName,
+    topicName: log.topicName,
+    categoryName: log.categoryName,
     createdAt: log.createdAt
   };
 }

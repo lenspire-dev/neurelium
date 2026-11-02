@@ -3,7 +3,7 @@
   import { Button } from '#lib/components/ui/button/index.js';
   import { Progress } from '#lib/components/ui/progress/index.js';
   import WeightBadge from '#lib/components/weight-badge.svelte';
-  import { formatWeek, formatWeekday } from '#lib/presentation/format.js';
+  import { formatDate, formatWeek, formatWeekday } from '#lib/presentation/format.js';
   import { CATEGORY_COLOR_META, buildCategoryColorMap } from '#lib/presentation/category-color.js';
   import { categoryBalance, dailyCompletion } from '#lib/presentation/dashboard.js';
   import { taskDisplayName } from '#lib/presentation/task-display.js';
@@ -17,18 +17,17 @@
       isWithinDateRange(log.completedDate, app.weekStart, endOfWeek(app.weekStart))
     )
   );
-  let completedIds = $derived(app.completedTaskIdsForWeek());
   let planned = $derived(app.entriesWithTask());
   let plannedWeight = $derived(
     planned.reduce((total, item) => total + item.task.taskWeight, 0)
   );
   let doneWeight = $derived(
     planned.reduce(
-      (total, item) => total + (completedIds.has(item.task.id) ? item.task.taskWeight : 0),
+      (total, item) => total + (item.entry.status === 'done' ? item.task.taskWeight : 0),
       0
     )
   );
-  let remaining = $derived(planned.filter((item) => !completedIds.has(item.task.id)).length);
+  let remaining = $derived(planned.filter((item) => item.entry.status !== 'done').length);
   let weekProgress = $derived(
     plannedWeight === 0 ? 0 : Math.round((doneWeight / plannedWeight) * 100)
   );
@@ -57,8 +56,7 @@
       app.categories,
       app.topics,
       app.tasks,
-      planned.map((item) => item.entry),
-      completedIds
+      planned.map((item) => item.entry)
     )
   );
   let categoryColors = $derived(buildCategoryColorMap(app.categories));
@@ -136,6 +134,15 @@
               {primary.category.name}
             </span>
             <WeightBadge value={primary.task.taskWeight} />
+            {#if app.completionCount(primary.task.id) > 0}
+              <span>
+                Completed {app.completionCount(primary.task.id)}
+                {app.completionCount(primary.task.id) === 1 ? 'time' : 'times'}
+                {#if app.lastCompletionDate(primary.task.id)}
+                  · last {formatDate(app.lastCompletionDate(primary.task.id)!)}
+                {/if}
+              </span>
+            {/if}
           </div>
           <p class="mt-4 rounded-lg bg-muted/60 px-3 py-2 text-sm">{primary.explanation}</p>
           <div class="mt-4 flex flex-wrap items-center gap-2">
@@ -281,7 +288,7 @@
                     <WeightBadge value={item.task.taskWeight} />
                   </span>
                 </span>
-                {#if completedIds.has(item.task.id)}
+                {#if item.entry.status === 'done'}
                   <span class="inline-flex items-center gap-1 text-xs font-medium text-primary">
                     <CheckCircle2 class="size-3.5" /> Done
                   </span>

@@ -22,10 +22,10 @@ function task(id: string, topicId: string, taskWeight: number): Task {
   return { id: asTaskId(id), workspaceId, topicId: asTopicId(topicId), title: id, icon: null, taskWeight, status: 'todo', statusChangedAt: null, doneDate: null, createdAt: '', updatedAt: '' };
 }
 function entry(id: string, taskId: string): WeeklyPoolEntry {
-  return { id: asWeeklyPoolEntryId(id), workspaceId, taskId: asTaskId(taskId), weekStart: '2026-10-26', plannedDate: null, createdAt: '' };
+  return { id: asWeeklyPoolEntryId(id), workspaceId, taskId: asTaskId(taskId), weekStart: '2026-10-26', plannedDate: null, status: 'todo', completedDate: null, createdAt: '' };
 }
 function log(id: string, completedDate: string): ActivityLog {
-  return { id: id as ActivityLog['id'], workspaceId, taskId: asTaskId('task'), completedDate, note: null, createdAt: '' };
+  return { id: id as ActivityLog['id'], workspaceId, taskId: asTaskId('task'), entryId: null, completedDate, note: null, taskName: null, topicName: null, categoryName: null, createdAt: '' };
 }
 
 describe('dailyCompletion', () => {
@@ -44,8 +44,11 @@ describe('categoryBalance', () => {
       [category('math'), category('algebra', 'math', 'Algebra'), category('physics')],
       [topic('math-topic', 'math'), topic('algebra-topic', 'algebra'), topic('physics-topic', 'physics')],
       [task('math-task', 'math-topic', 3), task('algebra-task', 'algebra-topic', 2), task('physics-task', 'physics-topic', 4)],
-      [entry('e1', 'math-task'), entry('e2', 'algebra-task'), entry('e3', 'physics-task')],
-      new Set(['math-task'])
+      [
+        { ...entry('e1', 'math-task'), status: 'done' },
+        entry('e2', 'algebra-task'),
+        entry('e3', 'physics-task')
+      ]
     );
     expect(balances.map((item) => [item.category.name, item.completedWeight, item.plannedWeight])).toEqual([
       ['math', 3, 5],

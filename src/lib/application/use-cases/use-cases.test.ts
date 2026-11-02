@@ -19,7 +19,7 @@ import type { TaskRepository } from '../../domain/ports/task-repository';
 import type { TopicRepository } from '../../domain/ports/topic-repository';
 import type { WeeklyPoolRepository } from '../../domain/ports/weekly-pool-repository';
 import { getMilestoneProgress, getStudyRecommendation } from './analytics';
-import { completeTask, removeWeekCompletion } from './execution';
+import { completeTask, removeWeekCompletion, setWeeklyEntryStatus } from './execution';
 import {
   createCategory,
   createTask,
@@ -313,15 +313,15 @@ describe('hierarchy use cases', () => {
 });
 
 describe('planning use cases', () => {
-  test('rejects assigning the same task to a week twice', async () => {
+  test('allows repeatable tasks in and across weeks', async () => {
     const harness = createHarness();
     const { task } = await seedTask(harness, 'Math', 5);
 
     await addTaskToWeek(harness, { workspaceId, taskId: task.id, weekStart });
+    await addTaskToWeek(harness, { workspaceId, taskId: task.id, weekStart });
+    await addTaskToWeek(harness, { workspaceId, taskId: task.id, weekStart: nextWeek });
 
-    await expect(
-      addTaskToWeek(harness, { workspaceId, taskId: task.id, weekStart })
-    ).rejects.toThrow('already assigned');
+    expect(await harness.weeklyPool.listByTask(workspaceId, task.id)).toHaveLength(3);
   });
 
   test('rolls over only incomplete tasks', async () => {
@@ -406,6 +406,39 @@ describe('execution use cases', () => {
       weekStart,
     });
 
+    expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(0);
+  });
+
+  test('keeps the task status manual while completing one occurrence', async () => {
+    const harness = createHarness();
+    const { task } = await seedTask(harness, 'Math', 5);
+    const entry = await addTaskToWeek(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+    });
+
+    const completed = await setWeeklyEntryStatus(harness, {
+      workspaceId,
+      entryId: entry.id,
+      status: 'done',
+      completedDate: '2026-10-28',
+    });
+
+    expect(completed.entry.status).toBe('done');
+    expect(completed.entry.completedDate).toBe('2026-10-28');
+    expect(completed.log?.entryId).toBe(entry.id);
+    expect(completed.log?.taskName).toBe(task.title);
+    expect((await harness.tasks.findById(workspaceId, task.id))?.status).toBe('todo');
+
+    const reopened = await setWeeklyEntryStatus(harness, {
+      workspaceId,
+      entryId: entry.id,
+      status: 'in_progress',
+    });
+
+    expect(reopened.entry.status).toBe('in_progress');
+    expect(reopened.entry.completedDate).toBeNull();
     expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(0);
   });
 

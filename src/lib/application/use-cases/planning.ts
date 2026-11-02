@@ -8,7 +8,7 @@ import type { ClockPort } from '../../domain/ports/clock-port';
 import type { IdGeneratorPort } from '../../domain/ports/id-generator-port';
 import type { TaskRepository } from '../../domain/ports/task-repository';
 import type { WeeklyPoolRepository } from '../../domain/ports/weekly-pool-repository';
-import { ConflictError, NotFoundError, ValidationError } from '../errors';
+import { NotFoundError, ValidationError } from '../errors';
 import { requireIsoDate, requireWeekStart } from '../validation';
 
 export interface PlanningDependencies {
@@ -37,17 +37,14 @@ export async function addTaskToWeek(
   const task = await deps.tasks.findById(input.workspaceId, input.taskId);
   if (task === null) throw new NotFoundError('Task not found.');
 
-  const existing = await deps.weeklyPool.listByTask(input.workspaceId, input.taskId);
-  if (existing.length > 0) {
-    throw new ConflictError('Task is already assigned to a week.');
-  }
-
   return deps.weeklyPool.save({
     id: asWeeklyPoolEntryId(deps.ids.next()),
     workspaceId: input.workspaceId,
     taskId: input.taskId,
     weekStart,
     plannedDate,
+    status: 'todo',
+    completedDate: null,
     createdAt: deps.clock.now().toISOString(),
   });
 }
@@ -67,11 +64,6 @@ export async function moveWeeklyPoolEntry(
   const entry = await deps.weeklyPool.findById(input.workspaceId, input.entryId);
   if (entry === null) throw new NotFoundError('Weekly pool entry not found.');
   if (entry.weekStart === weekStart) return entry;
-
-  const targetEntries = await deps.weeklyPool.listByWeek(input.workspaceId, weekStart);
-  if (targetEntries.some((candidate) => candidate.taskId === entry.taskId)) {
-    throw new ConflictError('Task is already assigned to the target week.');
-  }
 
   return deps.weeklyPool.save({
     ...entry,
@@ -131,10 +123,13 @@ export async function previewWeekRollover(
     endOfWeek(weekStart)
   );
   const completedTaskIds = new Set(logs.map((log) => log.taskId));
+  const isDone = (entry: WeeklyPoolEntry) =>
+    entry.status === 'done' ||
+    (entry.status === 'todo' && completedTaskIds.has(entry.taskId));
 
   return {
-    incomplete: entries.filter((entry) => !completedTaskIds.has(entry.taskId)),
-    completed: entries.filter((entry) => completedTaskIds.has(entry.taskId)),
+    incomplete: entries.filter((entry) => !isDone(entry) && entry.status !== 'skipped'),
+    completed: entries.filter(isDone),
   };
 }
 
@@ -158,14 +153,10 @@ export async function rolloverWeek(
     workspaceId: input.workspaceId,
     weekStart: fromWeekStart,
   });
-  const targetEntries = await deps.weeklyPool.listByWeek(input.workspaceId, toWeekStart);
-  const targetTaskIds = new Set(targetEntries.map((entry) => entry.taskId));
-
   const moved: WeeklyPoolEntry[] = [];
   // shortcut: moves are sequential; Phase 3 should wrap this in a backend transaction.
   const dayOffset = daysBetween(fromWeekStart, toWeekStart);
   for (const entry of preview.incomplete) {
-    if (targetTaskIds.has(entry.taskId)) continue;
     moved.push(
       await deps.weeklyPool.save({
         ...entry,

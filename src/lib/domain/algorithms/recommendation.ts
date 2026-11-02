@@ -70,7 +70,9 @@ export function recommendStudyTasks(
 
   for (const entry of context.poolEntries) {
     if (entry.weekStart !== context.weekStart) continue;
-    if (completedTaskIds.has(entry.taskId)) continue;
+    if (entry.status === 'done' || entry.status === 'skipped') continue;
+    // Legacy rows predate occurrence status; their completion lives only in logs.
+    if (entry.status === 'todo' && completedTaskIds.has(entry.taskId)) continue;
     if (remainingTaskIds.has(entry.taskId)) continue;
 
     const task = taskById.get(entry.taskId);

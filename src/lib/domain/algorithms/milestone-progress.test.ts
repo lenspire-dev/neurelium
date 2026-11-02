@@ -65,8 +65,12 @@ function log(id: string, taskId: string, completedDate: string): ActivityLog {
     id: asActivityLogId(id),
     workspaceId,
     taskId: asTaskId(taskId),
+    entryId: null,
     completedDate,
     note: null,
+    taskName: null,
+    topicName: null,
+    categoryName: null,
     createdAt: timestamp,
   };
 }

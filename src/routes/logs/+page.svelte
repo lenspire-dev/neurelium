@@ -20,15 +20,21 @@
   let logQuery = $state('');
   let changeQuery = $state('');
 
-  function taskTitle(taskId: string): string {
-    const task = app.tasks.find((item) => item.id === taskId);
-    return task === undefined ? 'Deleted task' : taskDisplayName(task, app.topicForTask(task));
+  function taskTitle(log: { taskId: string; taskName: string | null }): string {
+    const task = app.tasks.find((item) => item.id === log.taskId);
+    return task === undefined
+      ? (log.taskName ?? 'Deleted task')
+      : taskDisplayName(task, app.topicForTask(task));
   }
 
-  function categoryName(taskId: string): string {
-    const task = app.tasks.find((item) => item.id === taskId);
+  function logCategoryName(log: { taskId: string; categoryName: string | null }): string {
+    const task = app.tasks.find((item) => item.id === log.taskId);
     const topic = task === undefined ? undefined : app.topicForTask(task);
-    return app.categories.find((category) => category.id === topic?.categoryId)?.name ?? '';
+    return (
+      app.categories.find((category) => category.id === topic?.categoryId)?.name ??
+      log.categoryName ??
+      ''
+    );
   }
 
   let topicChoices = $derived(
@@ -47,7 +53,7 @@
     const query = logQuery.trim().toLocaleLowerCase();
     return app.activityLogs
       .filter((log) => {
-        if (query !== '' && !taskTitle(log.taskId).toLocaleLowerCase().includes(query)) {
+        if (query !== '' && !taskTitle(log).toLocaleLowerCase().includes(query)) {
           return false;
         }
         if (topicFilter === 'all') return true;
@@ -59,7 +65,7 @@
           return a.completedDate.localeCompare(b.completedDate) || a.createdAt.localeCompare(b.createdAt);
         }
         if (activitySort === 'recorded') return b.createdAt.localeCompare(a.createdAt);
-        if (activitySort === 'task') return taskTitle(a.taskId).localeCompare(taskTitle(b.taskId));
+        if (activitySort === 'task') return taskTitle(a).localeCompare(taskTitle(b));
         return b.completedDate.localeCompare(a.completedDate) || b.createdAt.localeCompare(a.createdAt);
       });
   });
@@ -183,9 +189,9 @@
                     aria-hidden="true"
                   ></span>
                   <div class="min-w-0 flex-1">
-                    <p class="truncate text-sm font-medium">{taskTitle(log.taskId)}</p>
+                    <p class="truncate text-sm font-medium">{taskTitle(log)}</p>
                     <p class="truncate text-xs text-muted-foreground">
-                      {categoryName(log.taskId)}{log.note ? ` · ${log.note}` : ''}
+                      {logCategoryName(log)}{log.note ? ` · ${log.note}` : ''}
                     </p>
                     <p class="truncate text-[11px] text-muted-foreground">
                       Recorded {formatTimestamp(log.createdAt)}

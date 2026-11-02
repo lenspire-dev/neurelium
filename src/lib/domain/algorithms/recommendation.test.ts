@@ -72,6 +72,8 @@ function entry(id: string, taskId: string, entryWeek = weekStart): WeeklyPoolEnt
     taskId: asTaskId(taskId),
     weekStart: entryWeek,
     plannedDate: null,
+    status: 'todo',
+    completedDate: null,
     createdAt,
   };
 }
@@ -81,8 +83,12 @@ function log(id: string, taskId: string, completedDate: string): ActivityLog {
     id: asActivityLogId(id),
     workspaceId,
     taskId: asTaskId(taskId),
+    entryId: null,
     completedDate,
     note: null,
+    taskName: null,
+    topicName: null,
+    categoryName: null,
     createdAt,
   };
 }

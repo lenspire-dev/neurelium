@@ -37,8 +37,7 @@ export function categoryBalance(
   categories: readonly Category[],
   topics: readonly Topic[],
   tasks: readonly Task[],
-  entries: readonly WeeklyPoolEntry[],
-  completedTaskIds: ReadonlySet<string>
+  entries: readonly WeeklyPoolEntry[]
 ): CategoryBalance[] {
   const categoriesById = new Map(categories.map((category) => [category.id, category]));
   const topicsById = new Map(topics.map((topic) => [topic.id, topic]));
@@ -69,7 +68,7 @@ export function categoryBalance(
     const root = rootOf(category);
     const balance = balances.get(root.id) ?? { completedWeight: 0, plannedWeight: 0 };
     balance.plannedWeight += task.taskWeight;
-    if (completedTaskIds.has(task.id)) balance.completedWeight += task.taskWeight;
+    if (entry.status === 'done') balance.completedWeight += task.taskWeight;
     balances.set(root.id, balance);
   }
 

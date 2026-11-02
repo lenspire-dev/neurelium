@@ -13,7 +13,6 @@ import {
 } from '#lib/domain/algorithms/week.js';
 import { calculateMilestoneProgress } from '#lib/domain/algorithms/milestone-progress.js';
 import { categoryDescendantIds } from '#lib/presentation/tree.js';
-import { applyTaskStatus } from '#lib/presentation/task-status.js';
 import type { ImportCategory } from '#lib/presentation/json-import.js';
 import { recommendStudyTasks } from '#lib/domain/algorithms/recommendation.js';
 import type {
@@ -60,10 +59,10 @@ import {
   createTopic,
   deleteMilestone,
   moveWeeklyPoolEntry,
-  removeWeekCompletion,
   removeWeeklyPoolEntry,
   scheduleWeeklyPoolEntry,
   setTaskStatus as setTaskStatusUseCase,
+  setWeeklyEntryStatus,
   updateCategory,
   updateMilestone,
   updateTask,
@@ -245,6 +244,8 @@ export class AppStore {
       taskId: id,
       weekStart,
       plannedDate,
+      status: 'todo',
+      completedDate: null,
       createdAt: new Date().toISOString()
     };
     this.weekEntries = [...this.weekEntries, temp];
@@ -412,25 +413,37 @@ export class AppStore {
     const id = asTaskId(taskId);
     const weekStart = this.weekStart;
     const today = this.today;
-    const tasksBefore = this.tasks;
+    const entry = this.weekEntries.find(
+      (item) =>
+        item.taskId === id && item.weekStart === weekStart && item.completedDate === null
+    );
+    if (entry === undefined) return;
     const logsBefore = this.activityLogs;
+    const weekEntriesBefore = this.weekEntries;
     const now = new Date().toISOString();
     const tempId = asActivityLogId(`optimistic-${++this.optimisticSeq}`);
+    const task = this.tasks.find((item) => item.id === id);
+    const topic = task === undefined ? undefined : this.topicForTask(task);
+    const category = this.categoryForTopic(topic);
     this.activityLogs = [
       ...logsBefore,
       {
         id: tempId,
         workspaceId,
         taskId: id,
+        entryId: entry.id,
         completedDate: today,
         note: null,
+        taskName: task?.title ?? null,
+        topicName: topic?.name ?? null,
+        categoryName: category?.name ?? null,
         createdAt: now
       }
     ];
-    this.tasks = applyTaskStatus(tasksBefore, id, 'done', today, now);
+    this.replaceEntry({ ...entry, status: 'done', completedDate: today });
     this.recomputeDerived();
 
-    await this.queueWrite(`task:${taskId}`, () =>
+    await this.queueWrite(`entry:${entry.id}`, () =>
       this.withBusy(
         async () => {
           const infra = this.requireInfrastructure();
@@ -439,10 +452,12 @@ export class AppStore {
               tasks: infra.tasks,
               weeklyPool: infra.weeklyPool,
               activityLogs: infra.activityLogs,
+              topics: infra.topics,
+              categories: infra.categories,
               clock: infra.clock,
               ids: infra.ids
             },
-            { workspaceId, taskId: id, weekStart, completedDate: today }
+            { workspaceId, taskId: id, weekStart, completedDate: today, entryId: entry.id }
           );
           this.activityLogs = this.activityLogs.map((item) =>
             item.id === tempId ? log : item
@@ -451,8 +466,8 @@ export class AppStore {
           await this.recordCompletionEvent(log, 'completed');
         },
         () => {
-          this.tasks = tasksBefore;
           this.activityLogs = logsBefore;
+          this.weekEntries = weekEntriesBefore;
           this.recomputeDerived();
           this.scheduleRefresh();
         }
@@ -476,96 +491,79 @@ export class AppStore {
     });
   }
 
-  async changeTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
+  async setEntryStatus(entryId: string, status: TaskStatus): Promise<void> {
     const workspaceId = this.workspace?.id;
     if (workspaceId === undefined) return;
-    const id = asTaskId(taskId);
-    const weekStart = this.weekStart;
-    const end = endOfWeek(weekStart);
-    const today = this.today;
-    const tasksBefore = this.tasks;
+    const id = asWeeklyPoolEntryId(entryId);
+    const entry = this.weekEntries.find((item) => item.id === id);
+    if (entry === undefined) return;
+    if (entry.status === status && (status !== 'done' || entry.completedDate !== null)) return;
+    const weekEntriesBefore = this.weekEntries;
     const logsBefore = this.activityLogs;
-    const now = new Date().toISOString();
-    const entry = this.weekEntries.find((item) => item.taskId === id);
-    const canComplete = isWithinDateRange(today, weekStart, end);
-    const completedThisWeek = logsBefore.some(
-      (log) => log.taskId === id && isWithinDateRange(log.completedDate, weekStart, end)
-    );
-    const shouldComplete =
-      status === 'done' && entry !== undefined && canComplete && !completedThisWeek;
+    const today = this.today;
+    const task = this.tasks.find((item) => item.id === entry.taskId);
+    const topic = task === undefined ? undefined : this.topicForTask(task);
+    const category = this.categoryForTopic(topic);
     const tempId = asActivityLogId(`optimistic-${++this.optimisticSeq}`);
-
-    if (shouldComplete) {
+    const removedLog = logsBefore.find((log) => log.entryId === entry.id);
+    this.replaceEntry({
+      ...entry,
+      status,
+      completedDate: status === 'done' ? (entry.completedDate ?? today) : null
+    });
+    if (status === 'done') {
       this.activityLogs = [
-        ...logsBefore,
+        ...logsBefore.filter((log) => log.entryId !== entry.id),
         {
           id: tempId,
           workspaceId,
-          taskId: id,
+          taskId: entry.taskId,
+          entryId: entry.id,
           completedDate: today,
           note: null,
-          createdAt: now
+          taskName: task?.title ?? null,
+          topicName: topic?.name ?? null,
+          categoryName: category?.name ?? null,
+          createdAt: new Date().toISOString()
         }
       ];
-      this.tasks = applyTaskStatus(tasksBefore, id, 'done', today, now);
     } else {
-      if (status !== 'done') {
-        this.activityLogs = logsBefore.filter(
-          (log) =>
-            !(log.taskId === id && isWithinDateRange(log.completedDate, weekStart, end))
-        );
-      }
-      this.tasks = applyTaskStatus(tasksBefore, id, status, today, now);
+      this.activityLogs = logsBefore.filter((log) => log.entryId !== entry.id);
     }
     this.recomputeDerived();
 
-    await this.queueWrite(`task:${taskId}`, () =>
+    await this.queueWrite(`entry:${entryId}`, () =>
       this.withBusy(
         async () => {
           const infra = this.requireInfrastructure();
-          if (shouldComplete) {
-            const log = await completeTask(
-              {
-                tasks: infra.tasks,
-                weeklyPool: infra.weeklyPool,
-                activityLogs: infra.activityLogs,
-                clock: infra.clock,
-                ids: infra.ids
-              },
-              { workspaceId, taskId: id, weekStart, completedDate: today }
-            );
-            this.activityLogs = this.activityLogs.map((item) =>
-              item.id === tempId ? log : item
-            );
-            await this.recordCompletionEvent(log, 'completed');
-          } else {
-            const removedLog = logsBefore.find(
-              (log) =>
-                log.taskId === id && isWithinDateRange(log.completedDate, weekStart, end)
-            );
-            if (status !== 'done') {
-              await removeWeekCompletion(
-                { activityLogs: infra.activityLogs },
-                { workspaceId, taskId: id, weekStart }
-              );
-              if (removedLog !== undefined) {
-                await this.recordCompletionEvent(removedLog, 'uncompleted');
-              }
-            }
-            const saved = await setTaskStatusUseCase(
-              { tasks: infra.tasks, clock: infra.clock },
-              { workspaceId, taskId: id, status }
-            );
-            this.tasks = this.upsert(this.tasks, saved);
+          const result = await setWeeklyEntryStatus(
+            {
+              tasks: infra.tasks,
+              weeklyPool: infra.weeklyPool,
+              activityLogs: infra.activityLogs,
+              topics: infra.topics,
+              categories: infra.categories,
+              clock: infra.clock,
+              ids: infra.ids
+            },
+            { workspaceId, entryId: id, status, completedDate: today }
+          );
+          this.replaceEntry(result.entry);
+          if (result.log !== null) {
+            this.activityLogs = this.activityLogs
+              .filter((log) => log.entryId !== entry.id)
+              .concat(result.log);
+            await this.recordCompletionEvent(result.log, 'completed');
+          } else if (removedLog !== undefined) {
+            await this.recordCompletionEvent(removedLog, 'uncompleted');
           }
           this.recomputeDerived();
-          const task = this.tasks.find((item) => item.id === id);
           if (task !== undefined) {
             await this.recordTaskEvent(task, 'status_changed', status);
           }
         },
         () => {
-          this.tasks = tasksBefore;
+          this.weekEntries = weekEntriesBefore;
           this.activityLogs = logsBefore;
           this.recomputeDerived();
           this.scheduleRefresh();
@@ -980,12 +978,17 @@ export class AppStore {
     });
   }
 
-  completedTaskIdsForWeek(): ReadonlySet<string> {
-    const end = endOfWeek(this.weekStart);
-    return new Set(
+  completionCount(taskId: string): number {
+    return this.activityLogs.filter((log) => log.taskId === taskId).length;
+  }
+
+  lastCompletionDate(taskId: string): IsoDate | null {
+    return (
       this.activityLogs
-        .filter((log) => isWithinDateRange(log.completedDate, this.weekStart, end))
-        .map((log) => log.taskId)
+        .filter((log) => log.taskId === taskId)
+        .map((log) => log.completedDate)
+        .sort()
+        .at(-1) ?? null
     );
   }
 
@@ -1161,7 +1164,19 @@ export class AppStore {
 
     const entries = await infra.weeklyPool.listByWeek(workspaceId, this.weekStart);
     if (token !== this.loadToken) return;
-    this.weekEntries = entries;
+    const end = endOfWeek(this.weekStart);
+    const legacyLogs = this.activityLogs.filter(
+      (log) =>
+        log.entryId === null &&
+        isWithinDateRange(log.completedDate, this.weekStart, end)
+    );
+    this.weekEntries = entries.map((entry) => {
+      const legacy = legacyLogs.find((log) => log.taskId === entry.taskId);
+      if (entry.status !== 'todo' || entry.completedDate !== null || legacy === undefined) {
+        return entry;
+      }
+      return { ...entry, status: 'done', completedDate: legacy.completedDate };
+    });
     this.recomputeDerived();
   }
 

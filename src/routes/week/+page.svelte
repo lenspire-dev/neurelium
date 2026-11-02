@@ -66,13 +66,12 @@
       .filter((item) => filterTasks([item.task], taskFilters).length > 0)
       .sort((a, b) => compare(a.task, b.task));
   });
-  let completedIds = $derived(app.completedTaskIdsForWeek());
   let plannedWeight = $derived(
     pool.reduce((total, item) => total + item.task.taskWeight, 0)
   );
   let doneWeight = $derived(
     pool.reduce(
-      (total, item) => total + (completedIds.has(item.task.id) ? item.task.taskWeight : 0),
+      (total, item) => total + (item.entry.status === 'done' ? item.task.taskWeight : 0),
       0
     )
   );
@@ -207,12 +206,12 @@
               'h-10 w-28 rounded-md border px-2 text-xs font-medium',
               taskStatusMeta(item.task.status).badgeClass
             )}
-            value={item.task.status}
-            aria-label="Status for {item.task.title}"
+            value={item.entry.status}
+            aria-label="Status for {item.task.title} this week"
             disabled={app.busy}
             onchange={(event) =>
-              app.changeTaskStatus(
-                item.task.id,
+              app.setEntryStatus(
+                item.entry.id,
                 (event.currentTarget as HTMLSelectElement).value as TaskStatus
               )}
           >

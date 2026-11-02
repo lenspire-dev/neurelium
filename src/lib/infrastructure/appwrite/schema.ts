@@ -181,6 +181,8 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
       id('taskId'),
       date('weekStart'),
       optionalDate('plannedDate'),
+      { key: 'status', type: 'varchar', size: 16, required: false },
+      optionalDate('completedDate'),
       timestamp('createdAt')
     ],
     indexes: [
@@ -194,8 +196,12 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
     columns: [
       id('workspaceId'),
       id('taskId'),
+      optionalId('entryId'),
       date('completedDate'),
       note('note'),
+      name('taskName', false),
+      name('topicName', false),
+      name('categoryName', false),
       timestamp('createdAt')
     ],
     indexes: [

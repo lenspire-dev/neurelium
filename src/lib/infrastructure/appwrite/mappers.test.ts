@@ -113,6 +113,8 @@ describe('row mappers', () => {
       taskId: task.id,
       weekStart: '2026-10-26',
       plannedDate: '2026-10-28',
+      status: 'todo',
+      completedDate: null,
       createdAt
     };
 
@@ -128,8 +130,12 @@ describe('row mappers', () => {
       id: asActivityLogId('log-a'),
       workspaceId,
       taskId: asTaskId('task-a'),
+      entryId: null,
       completedDate: '2026-10-30',
       note: null,
+      taskName: null,
+      topicName: null,
+      categoryName: null,
       createdAt
     };
     const noted: ActivityLog = { ...log, note: 'finished chapter 3' };
