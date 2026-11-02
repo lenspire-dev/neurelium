@@ -67,6 +67,25 @@ type Infrastructure = ReturnType<typeof createAppwriteInfrastructureFromEnv>;
 type SessionState = 'loading' | 'signed-out' | 'signed-in';
 
 const EMPTY_RECOMMENDATION: RecommendationResult = { primary: null, alternatives: [] };
+const ACTIVE_WORKSPACE_KEY = 'neurelium-active-workspace';
+
+function storedWorkspaceId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem(ACTIVE_WORKSPACE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeWorkspaceId(workspaceId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspaceId);
+  } catch {
+    /* storage can be unavailable in private mode */
+  }
+}
 
 export class AppStore {
   session = $state<SessionState>('loading');
@@ -132,10 +151,40 @@ export class AppStore {
     });
   }
 
+  async updateName(name: string): Promise<void> {
+    await this.withBusy(async () => {
+      this.user = await this.requireInfrastructure().auth.updateName(name);
+    });
+  }
+
+  async updateEmail(email: string, password: string): Promise<void> {
+    await this.withBusy(async () => {
+      this.user = await this.requireInfrastructure().auth.updateEmail({ email, password });
+    });
+  }
+
+  async updatePassword(password: string, oldPassword: string): Promise<void> {
+    await this.withBusy(async () => {
+      await this.requireInfrastructure().auth.updatePassword({ password, oldPassword });
+    });
+  }
+
+  async signOutEverywhere(): Promise<void> {
+    await this.withBusy(async () => {
+      await this.requireInfrastructure().auth.deleteSessions();
+      this.user = null;
+      this.session = 'signed-out';
+      this.workspace = null;
+      this.workspaces = [];
+      this.clearWorkspaceData();
+    });
+  }
+
   async selectWorkspace(workspaceId: string): Promise<void> {
     const workspace = this.workspaces.find((item) => item.id === workspaceId);
     if (workspace === undefined) return;
     this.workspace = workspace;
+    storeWorkspaceId(workspace.id);
     await this.refresh();
   }
 
@@ -153,6 +202,7 @@ export class AppStore {
       });
       this.workspaces = await infra.workspaces.listByOwner(user.id);
       this.workspace = workspace;
+      storeWorkspaceId(workspace.id);
       await this.refresh();
     });
   }
@@ -850,9 +900,12 @@ export class AppStore {
       await this.createWorkspace('My workspace');
       return;
     }
-    const first = this.workspaces[0];
-    if (first !== undefined) {
-      this.workspace = first;
+    const stored = storedWorkspaceId();
+    const selected =
+      this.workspaces.find((workspace) => workspace.id === stored) ?? this.workspaces[0];
+    if (selected !== undefined) {
+      this.workspace = selected;
+      storeWorkspaceId(selected.id);
       await this.refresh();
     }
   }

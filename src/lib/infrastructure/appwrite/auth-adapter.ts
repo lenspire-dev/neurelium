@@ -3,7 +3,9 @@ import type {
   AuthPort,
   AuthenticatedUser,
   SignInInput,
-  SignUpInput
+  SignUpInput,
+  UpdateEmailInput,
+  UpdatePasswordInput
 } from '../../domain/ports/auth-port';
 import { asUserId, type UserId } from '../../domain/models/identifiers';
 import { isUnauthorizedError } from './errors';
@@ -28,12 +30,7 @@ export class AppwriteAuthAdapter implements AuthPort, CurrentUserIdProvider {
 
     try {
       const user = await this.account.get();
-      this.cachedUser = {
-        id: asUserId(user.$id),
-        email: user.email,
-        name: user.name.trim().length === 0 ? null : user.name
-      };
-      return this.cachedUser;
+      return this.rememberUser(user);
     } catch (error) {
       if (isUnauthorizedError(error)) {
         this.cachedUser = null;
@@ -62,6 +59,32 @@ export class AppwriteAuthAdapter implements AuthPort, CurrentUserIdProvider {
     return this.signIn(input);
   }
 
+  async updateName(name: string): Promise<AuthenticatedUser> {
+    const user = await this.account.updateName({ name: name.trim() });
+    return this.rememberUser(user);
+  }
+
+  async updateEmail(input: UpdateEmailInput): Promise<AuthenticatedUser> {
+    const user = await this.account.updateEmail({
+      email: input.email.trim(),
+      password: input.password
+    });
+    return this.rememberUser(user);
+  }
+
+  async updatePassword(input: UpdatePasswordInput): Promise<void> {
+    await this.account.updatePassword({
+      password: input.password,
+      oldPassword: input.oldPassword
+    });
+    this.cachedUser = undefined;
+  }
+
+  async deleteSessions(): Promise<void> {
+    await this.account.deleteSessions();
+    this.cachedUser = null;
+  }
+
   async signOut(): Promise<void> {
     try {
       await this.account.deleteSession({ sessionId: 'current' });
@@ -70,6 +93,15 @@ export class AppwriteAuthAdapter implements AuthPort, CurrentUserIdProvider {
     } finally {
       this.cachedUser = null;
     }
+  }
+
+  private rememberUser(user: { $id: string; email: string; name: string }): AuthenticatedUser {
+    this.cachedUser = {
+      id: asUserId(user.$id),
+      email: user.email,
+      name: user.name.trim().length === 0 ? null : user.name
+    };
+    return this.cachedUser;
   }
 
   private async requireUser(): Promise<AuthenticatedUser> {

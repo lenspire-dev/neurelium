@@ -5,7 +5,9 @@
     History,
     LayoutDashboard,
     ListTree,
-    Target
+    Settings,
+    Target,
+    UserRound
   } from '@lucide/svelte';
 
   let { onNavigate }: { onNavigate?: () => void } = $props();
@@ -15,7 +17,9 @@
     { href: '/hierarchy', label: 'Hierarchy', icon: ListTree },
     { href: '/week', label: 'Week', icon: CalendarDays },
     { href: '/milestones', label: 'Milestones', icon: Target },
-    { href: '/logs', label: 'Activity', icon: History }
+    { href: '/logs', label: 'Activity', icon: History },
+    { href: '/account', label: 'Account', icon: UserRound },
+    { href: '/settings', label: 'Settings', icon: Settings }
   ];
 
   function isActive(href: string): boolean {
