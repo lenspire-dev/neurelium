@@ -18,6 +18,11 @@ export interface WorkspaceTeamPort {
     role: Exclude<WorkspaceRole, 'owner'>
   ): Promise<void>;
   removeMember(workspace: Workspace, membershipId: string): Promise<void>;
+  transferOwnership(
+    workspace: Workspace,
+    fromMembershipId: string,
+    toMembershipId: string
+  ): Promise<void>;
   acceptInvitation(input: {
     workspaceId: string;
     membershipId: string;

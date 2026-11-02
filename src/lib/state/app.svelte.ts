@@ -389,6 +389,41 @@ export class AppStore {
     });
   }
 
+  async transferOwnership(targetUserId: string): Promise<void> {
+    if (this.workspace === null || this.user === null) return;
+    await this.withBusy(async () => {
+      const infra = this.requireInfrastructure();
+      const currentMember = this.members.find(
+        (member) => member.userId === this.user?.id
+      );
+      const targetMember = this.members.find((member) => member.userId === targetUserId);
+      if (currentMember === undefined || targetMember === undefined) {
+        throw new Error('Load the member list before transferring ownership.');
+      }
+      await infra.team.transferOwnership(
+        this.workspace!,
+        currentMember.membershipId,
+        targetMember.membershipId
+      );
+      const saved = await infra.workspaces.transferOwnership(
+        this.workspace!,
+        targetMember.userId as typeof this.workspace.ownerId
+      );
+      this.workspace = saved;
+      this.workspaces = this.workspaces.map((item) =>
+        item.id === saved.id ? saved : item
+      );
+      this.members = await infra.team.listMembers(saved);
+      await this.recordEvent({
+        action: 'role_changed',
+        entityType: 'member',
+        entityId: targetMember.userId,
+        entityName: targetMember.name || targetMember.email,
+        detail: 'owner'
+      });
+    });
+  }
+
   async acceptInvitation(input: {
     workspaceId: string;
     membershipId: string;

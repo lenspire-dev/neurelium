@@ -74,6 +74,22 @@
     if (app.workspaces[0] !== undefined) await app.selectWorkspace(app.workspaces[0].id);
   }
 
+  async function transferOwnership(member: {
+    userId: string;
+    name: string;
+    email: string;
+  }) {
+    if (app.workspace === null) return;
+    const confirmed = await askConfirm({
+      title: `Make ${member.name || member.email} the owner?`,
+      description:
+        'You will become an admin and can no longer change members or delete the workspace.',
+      confirmLabel: 'Transfer ownership',
+      destructive: true
+    });
+    if (confirmed) await app.transferOwnership(member.userId);
+  }
+
   async function deleteWorkspace() {
     if (app.workspace === null) return;
     const confirmed = await askConfirm({
@@ -205,6 +221,15 @@
                   <option value="member">Member</option>
                   <option value="viewer">Viewer</option>
                 </select>
+                {#if member.userId !== app.user?.id}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onclick={() => transferOwnership(member)}
+                  >
+                    Make owner
+                  </Button>
+                {/if}
                 <Button
                   variant="ghost"
                   size="sm"

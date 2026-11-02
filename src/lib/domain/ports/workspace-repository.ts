@@ -8,4 +8,5 @@ export interface WorkspaceRepository {
   save(workspace: Workspace): Promise<Workspace>;
   migratePermissions(workspace: Workspace): Promise<void>;
   deleteWorkspace(workspace: Workspace): Promise<void>;
+  transferOwnership(workspace: Workspace, newOwnerId: UserId): Promise<Workspace>;
 }

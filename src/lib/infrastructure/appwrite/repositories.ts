@@ -470,6 +470,22 @@ export class AppwriteWorkspaceRepository implements WorkspaceRepository {
     }
   }
 
+  async transferOwnership(workspace: Workspace, newOwnerId: UserId): Promise<Workspace> {
+    const userId = await this.currentUser.currentUserId();
+    if (workspace.ownerId !== userId) {
+      throw new Error('Only the workspace owner can transfer ownership.');
+    }
+    const now = new Date().toISOString();
+    const row = await this.tables.updateRow<StoredRow>({
+      databaseId: this.databaseId,
+      tableId: APPWRITE_TABLES.workspaces,
+      rowId: workspace.id,
+      data: { ownerId: newOwnerId, updatedAt: now },
+      permissions: workspaceRowPermissions(newOwnerId, workspace.id)
+    });
+    return rowToWorkspace(row);
+  }
+
   async deleteWorkspace(workspace: Workspace): Promise<void> {
     const userId = await this.currentUser.currentUserId();
     if (workspace.ownerId !== userId) {

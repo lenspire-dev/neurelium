@@ -82,6 +82,23 @@ export class AppwriteWorkspaceTeamAdapter implements WorkspaceTeamPort {
     await this.teams.deleteMembership({ teamId: workspace.id, membershipId });
   }
 
+  async transferOwnership(
+    workspace: Workspace,
+    fromMembershipId: string,
+    toMembershipId: string
+  ): Promise<void> {
+    await this.teams.updateMembership({
+      teamId: workspace.id,
+      membershipId: toMembershipId,
+      roles: ['owner']
+    });
+    await this.teams.updateMembership({
+      teamId: workspace.id,
+      membershipId: fromMembershipId,
+      roles: ['admin']
+    });
+  }
+
   async acceptInvitation(input: {
     workspaceId: string;
     membershipId: string;
