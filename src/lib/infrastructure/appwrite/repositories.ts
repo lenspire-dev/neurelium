@@ -23,7 +23,11 @@ import type { TaskRepository } from '../../domain/ports/task-repository';
 import type { TopicRepository } from '../../domain/ports/topic-repository';
 import type { WeeklyPoolRepository } from '../../domain/ports/weekly-pool-repository';
 import type { WorkspaceRepository } from '../../domain/ports/workspace-repository';
-import { AppwriteRepository, ownerPermissions } from './base-repository';
+import {
+  AppwriteRepository,
+  workspacePermissions,
+  workspaceRowPermissions
+} from './base-repository';
 import type { CurrentUserIdProvider } from './auth-adapter';
 import { isNotFoundError } from './errors';
 import {
@@ -398,25 +402,11 @@ export class AppwriteWorkspaceRepository implements WorkspaceRepository {
   }
 
   async listByOwner(ownerId: UserId): Promise<readonly Workspace[]> {
-    const rows: Workspace[] = [];
-    let offset = 0;
+    return this.listRows([Query.equal('ownerId', ownerId)]);
+  }
 
-    while (true) {
-      const page = await this.tables.listRows<StoredRow>({
-        databaseId: this.databaseId,
-        tableId: APPWRITE_TABLES.workspaces,
-        queries: [
-          Query.equal('ownerId', ownerId),
-          Query.orderAsc('$id'),
-          Query.limit(PAGE_SIZE),
-          Query.offset(offset)
-        ]
-      });
-
-      rows.push(...page.rows.map(rowToWorkspace));
-      if (page.rows.length < PAGE_SIZE) return rows;
-      offset += PAGE_SIZE;
-    }
+  async listAccessible(): Promise<readonly Workspace[]> {
+    return this.listRows([]);
   }
 
   async save(workspace: Workspace): Promise<Workspace> {
@@ -430,9 +420,76 @@ export class AppwriteWorkspaceRepository implements WorkspaceRepository {
       tableId: APPWRITE_TABLES.workspaces,
       rowId: workspace.id,
       data: workspaceToData(workspace),
-      permissions: ownerPermissions(userId)
+      permissions: workspaceRowPermissions(userId, workspace.id)
     });
     return rowToWorkspace(row);
+  }
+
+  async migratePermissions(workspace: Workspace): Promise<void> {
+    const userId = await this.currentUser.currentUserId();
+    if (workspace.ownerId !== userId) {
+      throw new Error('Only the workspace owner can migrate permissions.');
+    }
+    const permissions = workspacePermissions(userId, workspace.id);
+    const tableIds = Object.values(APPWRITE_TABLES).filter(
+      (tableId) => tableId !== APPWRITE_TABLES.workspaces
+    );
+
+    for (const tableId of tableIds) {
+      let offset = 0;
+      while (true) {
+        let rows: StoredRow[];
+        try {
+          const page = await this.tables.listRows<StoredRow>({
+            databaseId: this.databaseId,
+            tableId,
+            queries: [
+              Query.equal('workspaceId', workspace.id),
+              Query.limit(PAGE_SIZE),
+              Query.offset(offset)
+            ]
+          });
+          rows = page.rows;
+        } catch (error) {
+          if (isNotFoundError(error)) break;
+          throw error;
+        }
+
+        for (const row of rows) {
+          await this.tables.updateRow({
+            databaseId: this.databaseId,
+            tableId,
+            rowId: row.$id,
+            data: {},
+            permissions
+          });
+        }
+        if (rows.length < PAGE_SIZE) break;
+        offset += PAGE_SIZE;
+      }
+    }
+  }
+
+  private async listRows(filters: readonly string[]): Promise<readonly Workspace[]> {
+    const rows: Workspace[] = [];
+    let offset = 0;
+
+    while (true) {
+      const page = await this.tables.listRows<StoredRow>({
+        databaseId: this.databaseId,
+        tableId: APPWRITE_TABLES.workspaces,
+        queries: [
+          ...filters,
+          Query.orderAsc('$id'),
+          Query.limit(PAGE_SIZE),
+          Query.offset(offset)
+        ]
+      });
+
+      rows.push(...page.rows.map(rowToWorkspace));
+      if (page.rows.length < PAGE_SIZE) return rows;
+      offset += PAGE_SIZE;
+    }
   }
 }
 

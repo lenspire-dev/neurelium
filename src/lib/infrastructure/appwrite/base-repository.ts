@@ -50,7 +50,7 @@ export abstract class AppwriteRepository<TEntity> {
       tableId: this.tableId,
       rowId: this.rowId(entity),
       data: this.toData(entity),
-      permissions: ownerPermissions(userId)
+      permissions: workspacePermissions(userId, workspaceOf(entity))
     });
     return this.fromRow(row);
   }
@@ -104,10 +104,44 @@ export abstract class AppwriteRepository<TEntity> {
   }
 }
 
+export function workspaceOf(entity: unknown): string {
+  if (
+    typeof entity === 'object' &&
+    entity !== null &&
+    'workspaceId' in entity &&
+    typeof entity.workspaceId === 'string'
+  ) {
+    return entity.workspaceId;
+  }
+  return '';
+}
+
 export function ownerPermissions(userId: string): string[] {
   return [
     Permission.read(Role.user(userId)),
     Permission.update(Role.user(userId)),
     Permission.delete(Role.user(userId))
+  ];
+}
+
+export function workspaceRowPermissions(userId: string, workspaceId: string): string[] {
+  return [
+    ...ownerPermissions(userId),
+    Permission.read(Role.team(workspaceId)),
+    Permission.update(Role.team(workspaceId, 'owner')),
+    Permission.update(Role.team(workspaceId, 'admin')),
+    Permission.delete(Role.team(workspaceId, 'owner'))
+  ];
+}
+
+export function workspacePermissions(userId: string, workspaceId: string): string[] {
+  if (workspaceId === '') return ownerPermissions(userId);
+  return [
+    ...ownerPermissions(userId),
+    Permission.read(Role.team(workspaceId)),
+    ...['owner', 'admin', 'member'].map((role) =>
+      Permission.update(Role.team(workspaceId, role))
+    ),
+    ...['owner', 'admin'].map((role) => Permission.delete(Role.team(workspaceId, role)))
   ];
 }

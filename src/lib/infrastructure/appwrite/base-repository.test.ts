@@ -172,7 +172,7 @@ describe('AppwriteRepository', () => {
     expect(tables.pages).toHaveLength(0);
   });
 
-  test('saves with owner-only row permissions', async () => {
+  test('saves with owner and team row permissions', async () => {
     const { tables, repository } = setup();
 
     const saved = await repository.save(category('category-a'));
@@ -182,7 +182,13 @@ describe('AppwriteRepository', () => {
     expect(tables.savedPermissions).toEqual([
       Permission.read(Role.user(user)),
       Permission.update(Role.user(user)),
-      Permission.delete(Role.user(user))
+      Permission.delete(Role.user(user)),
+      Permission.read(Role.team(workspace)),
+      Permission.update(Role.team(workspace, 'owner')),
+      Permission.update(Role.team(workspace, 'admin')),
+      Permission.update(Role.team(workspace, 'member')),
+      Permission.delete(Role.team(workspace, 'owner')),
+      Permission.delete(Role.team(workspace, 'admin'))
     ]);
   });
 

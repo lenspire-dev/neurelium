@@ -8,3 +8,4 @@ export * from './task-repository';
 export * from './topic-repository';
 export * from './weekly-pool-repository';
 export * from './workspace-repository';
+export * from './workspace-team-port';

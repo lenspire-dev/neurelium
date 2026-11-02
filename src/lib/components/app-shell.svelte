@@ -211,6 +211,14 @@
 
   <main class="min-w-0 flex-1 pb-[max(1rem,env(safe-area-inset-bottom))] md:pb-10">
     <div class="mx-auto w-full max-w-6xl px-3 py-4 sm:px-6 md:py-8">
+      {#if app.workspaceRole === 'viewer'}
+        <div
+          class="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
+          role="status"
+        >
+          You have view-only access to this workspace.
+        </div>
+      {/if}
       {#if app.error}
         <div
           class="mb-4 flex items-start justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -237,7 +245,9 @@
           </div>
         </div>
       {:else}
-        {@render children()}
+        <div inert={app.workspaceRole === 'viewer'}>
+          {@render children()}
+        </div>
       {/if}
     </div>
   </main>

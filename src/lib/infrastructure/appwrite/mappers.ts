@@ -59,10 +59,16 @@ function requiredNumber(row: StoredRow, key: string): number {
 }
 
 export function rowToWorkspace(row: StoredRow): Workspace {
+  const defaultView = nullableString(row, 'defaultView');
+  const weekStartsOn = nullableString(row, 'weekStartsOn');
+  const categoryOverrideMode = nullableString(row, 'categoryOverrideMode');
   return {
     id: asWorkspaceId(row.$id),
     name: requiredString(row, 'name'),
     ownerId: asUserId(requiredString(row, 'ownerId')),
+    defaultView: defaultView === 'week' ? 'week' : 'day',
+    weekStartsOn: weekStartsOn === 'sunday' ? 'sunday' : 'monday',
+    categoryOverrideMode: categoryOverrideMode === 'done_only' ? 'done_only' : 'any',
     createdAt: requiredString(row, 'createdAt'),
     updatedAt: requiredString(row, 'updatedAt')
   };
@@ -72,6 +78,9 @@ export function workspaceToData(workspace: Workspace): RowData {
   return {
     name: workspace.name,
     ownerId: workspace.ownerId,
+    defaultView: workspace.defaultView ?? 'day',
+    weekStartsOn: workspace.weekStartsOn ?? 'monday',
+    categoryOverrideMode: workspace.categoryOverrideMode ?? 'any',
     createdAt: workspace.createdAt,
     updatedAt: workspace.updatedAt
   };

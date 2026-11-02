@@ -47,6 +47,14 @@
   type PoolItem = { entry: WeeklyPoolEntry; task: Task };
 
   let view = $state<'day' | 'week'>('day');
+  let viewInitializedFor = $state<string | null>(null);
+
+  $effect(() => {
+    const workspace = app.workspace;
+    if (workspace === null || workspace.id === viewInitializedFor) return;
+    viewInitializedFor = workspace.id;
+    view = workspace.defaultView ?? 'day';
+  });
   let selectedDate = $state<IsoDate>(app.today);
   let taskSort = $state<TaskSortKey>('created');
   let taskSortDirection = $state<SortDirection>('desc');

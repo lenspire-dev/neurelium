@@ -117,7 +117,15 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
   {
     id: APPWRITE_TABLES.workspaces,
     name: 'Workspaces',
-    columns: [name('name'), id('ownerId'), timestamp('createdAt'), timestamp('updatedAt')],
+    columns: [
+      name('name'),
+      id('ownerId'),
+      { key: 'defaultView', type: 'varchar', size: 16, required: false },
+      { key: 'weekStartsOn', type: 'varchar', size: 16, required: false },
+      { key: 'categoryOverrideMode', type: 'varchar', size: 16, required: false },
+      timestamp('createdAt'),
+      timestamp('updatedAt')
+    ],
     indexes: [keyIndex('idx_owner', 'ownerId')]
   },
   {

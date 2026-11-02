@@ -59,6 +59,9 @@ describe('row mappers', () => {
       id: workspaceId,
       name: 'Study',
       ownerId: asUserId('user-a'),
+      defaultView: 'day',
+      weekStartsOn: 'monday',
+      categoryOverrideMode: 'any',
       createdAt,
       updatedAt: createdAt
     };

@@ -35,7 +35,11 @@ import type {
   Topic
 } from '#lib/domain/models/hierarchy.js';
 import type { WeeklyPoolEntry } from '#lib/domain/models/planning.js';
-import type { Workspace } from '#lib/domain/models/workspace.js';
+import type { Workspace, WorkspaceDefaultView, WorkspaceWeekStart } from '#lib/domain/models/workspace.js';
+import type {
+  WorkspaceMember,
+  WorkspaceRole
+} from '#lib/domain/models/workspace-member.js';
 import type { TaskStatus } from '#lib/domain/models/task-status.js';
 import type { WeightGrade } from '#lib/domain/models/weight.js';
 import {
@@ -99,6 +103,8 @@ export class AppStore {
   user = $state<AuthenticatedUser | null>(null);
   workspaces = $state<readonly Workspace[]>([]);
   workspace = $state<Workspace | null>(null);
+  members = $state<readonly WorkspaceMember[]>([]);
+  membersLoading = $state(false);
   categories = $state<readonly Category[]>([]);
   topics = $state<readonly Topic[]>([]);
   tasks = $state<readonly Task[]>([]);
@@ -156,6 +162,7 @@ export class AppStore {
       this.session = 'signed-out';
       this.workspace = null;
       this.workspaces = [];
+      this.members = [];
       this.clearWorkspaceData();
     });
   }
@@ -185,6 +192,7 @@ export class AppStore {
       this.session = 'signed-out';
       this.workspace = null;
       this.workspaces = [];
+      this.members = [];
       this.clearWorkspaceData();
     });
   }
@@ -202,23 +210,173 @@ export class AppStore {
       const infra = this.requireInfrastructure();
       const user = this.requireUser();
       const now = infra.clock.now().toISOString();
-      const workspace = await infra.workspaces.save({
+      const workspace: Workspace = {
         id: asWorkspaceId(infra.ids.next()),
         name: name.trim() || 'My workspace',
         ownerId: user.id,
+        defaultView: 'day',
+        weekStartsOn: 'monday',
+        categoryOverrideMode: 'any',
         createdAt: now,
         updatedAt: now
-      });
-      this.workspaces = await infra.workspaces.listByOwner(user.id);
-      this.workspace = workspace;
-      storeWorkspaceId(workspace.id);
+      };
+      await infra.team.ensureTeam(workspace);
+      const saved = await infra.workspaces.save(workspace);
+      this.workspaces = await infra.workspaces.listAccessible();
+      this.workspace = saved;
+      storeWorkspaceId(saved.id);
       await this.refresh();
       await this.recordEvent({
         action: 'created',
         entityType: 'workspace',
-        entityId: workspace.id,
-        entityName: workspace.name
+        entityId: saved.id,
+        entityName: saved.name
       });
+    });
+  }
+
+  get workspaceRole(): WorkspaceRole {
+    if (this.workspace === null || this.user === null) return 'viewer';
+    if (this.workspace.ownerId === this.user.id) return 'owner';
+    return (
+      this.members.find((member) => member.userId === this.user?.id)?.role ?? 'member'
+    );
+  }
+
+  get canManageMembers(): boolean {
+    return this.workspaceRole === 'owner' || this.workspaceRole === 'admin';
+  }
+
+  get canWrite(): boolean {
+    return this.workspaceRole !== 'viewer';
+  }
+
+  async updateWorkspaceSettings(input: {
+    name?: string;
+    defaultView?: WorkspaceDefaultView;
+    weekStartsOn?: WorkspaceWeekStart;
+    categoryOverrideMode?: Workspace['categoryOverrideMode'];
+  }): Promise<void> {
+    const current = this.workspace;
+    if (current === null) return;
+    await this.withBusy(async () => {
+      const infra = this.requireInfrastructure();
+      const workspace: Workspace = {
+        id: current.id,
+        name: input.name?.trim() || current.name,
+        ownerId: current.ownerId,
+        defaultView: input.defaultView ?? current.defaultView ?? 'day',
+        weekStartsOn: input.weekStartsOn ?? current.weekStartsOn ?? 'monday',
+        categoryOverrideMode:
+          input.categoryOverrideMode ?? current.categoryOverrideMode ?? 'any',
+        createdAt: current.createdAt,
+        updatedAt: infra.clock.now().toISOString()
+      };
+      const saved = await infra.workspaces.save(workspace);
+      this.workspace = saved;
+      this.workspaces = this.workspaces.map((item) =>
+        item.id === saved.id ? saved : item
+      );
+      await this.recordEvent({
+        action: 'updated',
+        entityType: 'workspace',
+        entityId: saved.id,
+        entityName: saved.name
+      });
+    });
+  }
+
+  async loadMembers(): Promise<void> {
+    if (this.workspace === null) return;
+    this.membersLoading = true;
+    try {
+      const infra = this.requireInfrastructure();
+      const created = await infra.team.ensureTeam(this.workspace);
+      if (created && this.workspace.ownerId === this.user?.id) {
+        await infra.workspaces.migratePermissions(this.workspace);
+      }
+      this.members = await infra.team.listMembers(this.workspace);
+    } catch (error) {
+      this.error = messageFor(error);
+    } finally {
+      this.membersLoading = false;
+    }
+  }
+
+  async inviteMember(
+    email: string,
+    role: Exclude<WorkspaceRole, 'owner'>
+  ): Promise<void> {
+    if (this.workspace === null) return;
+    await this.withBusy(async () => {
+      const infra = this.requireInfrastructure();
+      await infra.team.ensureTeam(this.workspace!);
+      await infra.team.invite(
+        this.workspace!,
+        email,
+        role,
+        `${window.location.origin}/accept-invite`
+      );
+      this.members = await infra.team.listMembers(this.workspace!);
+      await this.recordEvent({
+        action: 'member_invited',
+        entityType: 'member',
+        entityId: email,
+        entityName: email,
+        detail: role
+      });
+    });
+  }
+
+  async updateMemberRole(
+    membershipId: string,
+    role: Exclude<WorkspaceRole, 'owner'>
+  ): Promise<void> {
+    if (this.workspace === null) return;
+    await this.withBusy(async () => {
+      const infra = this.requireInfrastructure();
+      const member = this.members.find((item) => item.membershipId === membershipId);
+      await infra.team.updateRole(this.workspace!, membershipId, role);
+      this.members = await infra.team.listMembers(this.workspace!);
+      if (member !== undefined) {
+        await this.recordEvent({
+          action: 'role_changed',
+          entityType: 'member',
+          entityId: member.userId,
+          entityName: member.name || member.email,
+          detail: role
+        });
+      }
+    });
+  }
+
+  async removeMember(membershipId: string): Promise<void> {
+    if (this.workspace === null) return;
+    const member = this.members.find((item) => item.membershipId === membershipId);
+    await this.withBusy(async () => {
+      const infra = this.requireInfrastructure();
+      await infra.team.removeMember(this.workspace!, membershipId);
+      this.members = await infra.team.listMembers(this.workspace!);
+      if (member !== undefined) {
+        await this.recordEvent({
+          action: 'member_removed',
+          entityType: 'member',
+          entityId: member.userId,
+          entityName: member.name || member.email
+        });
+      }
+    });
+  }
+
+  async acceptInvitation(input: {
+    workspaceId: string;
+    membershipId: string;
+    userId: string;
+    secret: string;
+  }): Promise<void> {
+    await this.withBusy(async () => {
+      await this.requireInfrastructure().team.acceptInvitation(input);
+      await this.loadWorkspaces();
     });
   }
 
@@ -1202,7 +1360,7 @@ export class AppStore {
   private async loadWorkspaces(): Promise<void> {
     const infra = this.requireInfrastructure();
     const user = this.requireUser();
-    this.workspaces = await infra.workspaces.listByOwner(user.id);
+    this.workspaces = await infra.workspaces.listAccessible();
     if (this.workspaces.length === 0) {
       await this.createWorkspace('My workspace');
       return;

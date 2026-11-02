@@ -115,7 +115,8 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
           categoryId: selected.id,
           categories: app.categories,
           topics: app.topics,
-          tasks: app.tasks
+          tasks: app.tasks,
+          overrideMode: app.workspace?.categoryOverrideMode ?? 'any'
         })
   );
   let childCategories = $derived(
