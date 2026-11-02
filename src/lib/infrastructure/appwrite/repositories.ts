@@ -1,4 +1,5 @@
 import { Query, type TablesDB } from 'appwrite';
+import type { ActivityEvent } from '../../domain/models/activity';
 import type { Milestone } from '../../domain/models/analytics';
 import type { IsoDate, WeekStart } from '../../domain/models/common';
 import type { ActivityLog } from '../../domain/models/execution';
@@ -14,6 +15,7 @@ import type {
 } from '../../domain/models/identifiers';
 import type { WeeklyPoolEntry } from '../../domain/models/planning';
 import type { Workspace } from '../../domain/models/workspace';
+import type { ActivityEventRepository } from '../../domain/ports/activity-event-repository';
 import type { ActivityLogRepository } from '../../domain/ports/activity-log-repository';
 import type { CategoryRepository } from '../../domain/ports/category-repository';
 import type { MilestoneRepository } from '../../domain/ports/milestone-repository';
@@ -25,9 +27,11 @@ import { AppwriteRepository, ownerPermissions } from './base-repository';
 import type { CurrentUserIdProvider } from './auth-adapter';
 import { isNotFoundError } from './errors';
 import {
+  activityEventToData,
   activityLogToData,
   categoryToData,
   milestoneToData,
+  rowToActivityEvent,
   rowToActivityLog,
   rowToCategory,
   rowToMilestone,
@@ -294,6 +298,40 @@ export class AppwriteActivityLogRepository
   }
 }
 
+export class AppwriteActivityEventRepository
+  extends AppwriteRepository<ActivityEvent>
+  implements ActivityEventRepository
+{
+  constructor(
+    tables: TablesDB,
+    databaseId: string,
+    currentUser: CurrentUserIdProvider
+  ) {
+    super(tables, databaseId, APPWRITE_TABLES.activityEvents, currentUser);
+  }
+
+  protected rowId(event: ActivityEvent): string {
+    return event.id;
+  }
+
+  protected fromRow(row: StoredRow): ActivityEvent {
+    return rowToActivityEvent(row);
+  }
+
+  protected toData(event: ActivityEvent): Record<string, unknown> {
+    return activityEventToData(event);
+  }
+
+  async listByWorkspace(workspaceId: WorkspaceId): Promise<readonly ActivityEvent[]> {
+    const events = await this.listEntities(workspaceId);
+    return events.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  save(event: ActivityEvent): Promise<ActivityEvent> {
+    return this.saveEntity(event);
+  }
+}
+
 export class AppwriteMilestoneRepository
   extends AppwriteRepository<Milestone>
   implements MilestoneRepository
@@ -410,6 +448,7 @@ export function createAppwriteRepositories(
     tasks: new AppwriteTaskRepository(tables, databaseId, currentUser),
     weeklyPool: new AppwriteWeeklyPoolRepository(tables, databaseId, currentUser),
     activityLogs: new AppwriteActivityLogRepository(tables, databaseId, currentUser),
+    activityEvents: new AppwriteActivityEventRepository(tables, databaseId, currentUser),
     milestones: new AppwriteMilestoneRepository(tables, databaseId, currentUser)
   } as const;
 }

@@ -7,6 +7,7 @@ export const APPWRITE_TABLES = {
   tasks: 'tasks',
   weeklyPoolEntries: 'weekly_pool_entries',
   activityLogs: 'activity_logs',
+  activityEvents: 'activity_events',
   milestones: 'milestones'
 } as const;
 
@@ -200,6 +201,26 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
     indexes: [
       keyIndex('idx_workspace_date', 'workspaceId', 'completedDate'),
       keyIndex('idx_task', 'taskId')
+    ]
+  },
+  {
+    id: APPWRITE_TABLES.activityEvents,
+    name: 'Activity events',
+    columns: [
+      id('workspaceId'),
+      id('actorId'),
+      name('actorName'),
+      { key: 'action', type: 'varchar', size: 32, required: true },
+      { key: 'entityType', type: 'varchar', size: 32, required: true },
+      id('entityId'),
+      name('entityName'),
+      name('contextName', false),
+      note('detail'),
+      timestamp('createdAt')
+    ],
+    indexes: [
+      keyIndex('idx_workspace_created', 'workspaceId', 'createdAt'),
+      keyIndex('idx_entity', 'entityType', 'entityId')
     ]
   },
   {

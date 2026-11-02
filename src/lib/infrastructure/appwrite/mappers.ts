@@ -1,10 +1,16 @@
 import type { Models } from 'appwrite';
+import {
+  isActivityAction,
+  isActivityEntityType,
+  type ActivityEvent
+} from '../../domain/models/activity';
 import type { Milestone } from '../../domain/models/analytics';
 import { isCategoryColor, type CategoryColor } from '../../domain/models/category-color';
 import type { ActivityLog } from '../../domain/models/execution';
 import type { Category, Task, Topic } from '../../domain/models/hierarchy';
 import { DEFAULT_TASK_STATUS, isTaskStatus } from '../../domain/models/task-status';
 import {
+  asActivityEventId,
   asActivityLogId,
   asCategoryId,
   asMilestoneId,
@@ -190,6 +196,46 @@ export function activityLogToData(log: ActivityLog): RowData {
     completedDate: log.completedDate,
     note: log.note,
     createdAt: log.createdAt
+  };
+}
+
+export function rowToActivityEvent(row: StoredRow): ActivityEvent {
+  const action = requiredString(row, 'action');
+  const entityType = requiredString(row, 'entityType');
+  if (!isActivityAction(action)) {
+    throw new Error(`Appwrite row ${row.$id} has an unknown activity action.`);
+  }
+  if (!isActivityEntityType(entityType)) {
+    throw new Error(`Appwrite row ${row.$id} has an unknown activity entity type.`);
+  }
+
+  return {
+    id: asActivityEventId(row.$id),
+    workspaceId: asWorkspaceId(requiredString(row, 'workspaceId')),
+    actorId: asUserId(requiredString(row, 'actorId')),
+    actorName: requiredString(row, 'actorName'),
+    action,
+    entityType,
+    entityId: requiredString(row, 'entityId'),
+    entityName: requiredString(row, 'entityName'),
+    contextName: nullableString(row, 'contextName'),
+    detail: nullableString(row, 'detail'),
+    createdAt: requiredString(row, 'createdAt')
+  };
+}
+
+export function activityEventToData(event: ActivityEvent): RowData {
+  return {
+    workspaceId: event.workspaceId,
+    actorId: event.actorId,
+    actorName: event.actorName,
+    action: event.action,
+    entityType: event.entityType,
+    entityId: event.entityId,
+    entityName: event.entityName,
+    contextName: event.contextName,
+    detail: event.detail,
+    createdAt: event.createdAt
   };
 }
 

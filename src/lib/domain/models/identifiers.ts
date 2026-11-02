@@ -13,6 +13,7 @@ export type TopicId = BrandedId<'TopicId'>;
 export type TaskId = BrandedId<'TaskId'>;
 export type WeeklyPoolEntryId = BrandedId<'WeeklyPoolEntryId'>;
 export type ActivityLogId = BrandedId<'ActivityLogId'>;
+export type ActivityEventId = BrandedId<'ActivityEventId'>;
 export type MilestoneId = BrandedId<'MilestoneId'>;
 
 export const asUserId = (value: string): UserId => value as UserId;
@@ -23,4 +24,6 @@ export const asTaskId = (value: string): TaskId => value as TaskId;
 export const asWeeklyPoolEntryId = (value: string): WeeklyPoolEntryId =>
   value as WeeklyPoolEntryId;
 export const asActivityLogId = (value: string): ActivityLogId => value as ActivityLogId;
+export const asActivityEventId = (value: string): ActivityEventId =>
+  value as ActivityEventId;
 export const asMilestoneId = (value: string): MilestoneId => value as MilestoneId;

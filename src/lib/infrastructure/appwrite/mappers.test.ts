@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import type { ActivityEvent } from '../../domain/models/activity';
 import type { Milestone } from '../../domain/models/analytics';
 import type { ActivityLog } from '../../domain/models/execution';
 import type { Category, Task, Topic } from '../../domain/models/hierarchy';
 import {
+  asActivityEventId,
   asActivityLogId,
   asCategoryId,
   asMilestoneId,
@@ -15,9 +17,11 @@ import {
 import type { WeeklyPoolEntry } from '../../domain/models/planning';
 import type { Workspace } from '../../domain/models/workspace';
 import {
+  activityEventToData,
   activityLogToData,
   categoryToData,
   milestoneToData,
+  rowToActivityEvent,
   rowToActivityLog,
   rowToCategory,
   rowToMilestone,
@@ -132,6 +136,41 @@ describe('row mappers', () => {
 
     expect(rowToActivityLog(row(log.id, activityLogToData(log)))).toEqual(log);
     expect(rowToActivityLog(row(noted.id, activityLogToData(noted)))).toEqual(noted);
+  });
+
+  test('round-trips an activity event with snapshots', () => {
+    const event: ActivityEvent = {
+      id: asActivityEventId('event-a'),
+      workspaceId,
+      actorId: asUserId('user-a'),
+      actorName: 'Ada',
+      action: 'moved',
+      entityType: 'task',
+      entityId: 'task-a',
+      entityName: 'Solve exercises',
+      contextName: 'Math · Algebra',
+      detail: 'Week of 2026-11-02',
+      createdAt
+    };
+
+    expect(rowToActivityEvent(row(event.id, activityEventToData(event)))).toEqual(event);
+  });
+
+  test('rejects unknown activity actions instead of guessing', () => {
+    expect(() =>
+      rowToActivityEvent(
+        row('event-a', {
+          workspaceId,
+          actorId: 'user-a',
+          actorName: 'Ada',
+          action: 'exploded',
+          entityType: 'task',
+          entityId: 'task-a',
+          entityName: 'Task',
+          createdAt
+        })
+      )
+    ).toThrow('unknown activity action');
   });
 
   test('round-trips both milestone scopes', () => {

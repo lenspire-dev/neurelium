@@ -17,6 +17,11 @@ import { applyTaskStatus } from '#lib/presentation/task-status.js';
 import type { ImportCategory } from '#lib/presentation/json-import.js';
 import { recommendStudyTasks } from '#lib/domain/algorithms/recommendation.js';
 import type {
+  ActivityAction,
+  ActivityEntityType,
+  ActivityEvent
+} from '#lib/domain/models/activity.js';
+import type {
   Milestone,
   MilestoneProgress,
   RecommendationResult
@@ -34,6 +39,7 @@ import type { Workspace } from '#lib/domain/models/workspace.js';
 import type { TaskStatus } from '#lib/domain/models/task-status.js';
 import type { WeightGrade } from '#lib/domain/models/weight.js';
 import {
+  asActivityEventId,
   asActivityLogId,
   asCategoryId,
   asTopicId,
@@ -44,6 +50,7 @@ import {
 } from '#lib/domain/models/identifiers.js';
 import type { AuthenticatedUser } from '#lib/domain/ports/auth-port.js';
 import { createAppwriteInfrastructureFromEnv } from '#lib/infrastructure/appwrite/index.js';
+import { isNotFoundError } from '#lib/infrastructure/appwrite/errors.js';
 import {
   addTaskToWeek,
   completeTask,
@@ -98,6 +105,7 @@ export class AppStore {
   milestones = $state<readonly Milestone[]>([]);
   milestoneProgress = $state<readonly MilestoneProgress[]>([]);
   activityLogs = $state<readonly ActivityLog[]>([]);
+  activityEvents = $state<readonly ActivityEvent[]>([]);
   weekEntries = $state<readonly WeeklyPoolEntry[]>([]);
   recommendation = $state<RecommendationResult>(EMPTY_RECOMMENDATION);
   weekStart = $state<WeekStart>(startOfWeek(toIsoDate(new Date())));
@@ -112,6 +120,7 @@ export class AppStore {
   private writeQueue = new Map<string, Promise<void>>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private optimisticSeq = 0;
+  private eventsAvailable = true;
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -204,6 +213,12 @@ export class AppStore {
       this.workspace = workspace;
       storeWorkspaceId(workspace.id);
       await this.refresh();
+      await this.recordEvent({
+        action: 'created',
+        entityType: 'workspace',
+        entityId: workspace.id,
+        entityName: workspace.name
+      });
     });
   }
 
@@ -253,6 +268,14 @@ export class AppStore {
             entry.id === tempId ? saved : entry
           );
           this.recomputeDerived();
+          const task = this.tasks.find((item) => item.id === id);
+          if (task !== undefined) {
+            await this.recordTaskEvent(
+              task,
+              plannedDate === null ? 'unscheduled' : 'scheduled',
+              plannedDate ?? weekStart
+            );
+          }
         },
         () => {
           this.weekEntries = this.weekEntries.filter((entry) => entry.id !== tempId);
@@ -290,6 +313,14 @@ export class AppStore {
           );
           this.replaceEntry(saved);
           this.recomputeDerived();
+          const task = this.tasks.find((item) => item.id === entry.taskId);
+          if (task !== undefined) {
+            await this.recordTaskEvent(
+              task,
+              plannedDate === null ? 'unscheduled' : 'scheduled',
+              plannedDate ?? this.weekStart
+            );
+          }
         },
         () => {
           this.replaceEntry(previous);
@@ -325,6 +356,10 @@ export class AppStore {
             },
             { workspaceId, entryId: id, weekStart: target }
           );
+          const task = this.tasks.find((item) => item.id === entry.taskId);
+          if (task !== undefined) {
+            await this.recordTaskEvent(task, 'moved', `Week of ${target}`);
+          }
         },
         () => {
           this.weekEntries = previous;
@@ -338,7 +373,8 @@ export class AppStore {
   async removeEntry(entryId: string): Promise<void> {
     const id = asWeeklyPoolEntryId(entryId);
     const previous = this.weekEntries;
-    if (!previous.some((entry) => entry.id === id)) return;
+    const removed = previous.find((entry) => entry.id === id);
+    if (removed === undefined) return;
     this.weekEntries = previous.filter((entry) => entry.id !== id);
     this.recomputeDerived();
 
@@ -358,6 +394,8 @@ export class AppStore {
             },
             { workspaceId, entryId: id }
           );
+          const task = this.tasks.find((item) => item.id === removed.taskId);
+          if (task !== undefined) await this.recordTaskEvent(task, 'unscheduled');
         },
         () => {
           this.weekEntries = previous;
@@ -410,6 +448,7 @@ export class AppStore {
             item.id === tempId ? log : item
           );
           this.recomputeDerived();
+          await this.recordCompletionEvent(log, 'completed');
         },
         () => {
           this.tasks = tasksBefore;
@@ -498,12 +537,20 @@ export class AppStore {
             this.activityLogs = this.activityLogs.map((item) =>
               item.id === tempId ? log : item
             );
+            await this.recordCompletionEvent(log, 'completed');
           } else {
+            const removedLog = logsBefore.find(
+              (log) =>
+                log.taskId === id && isWithinDateRange(log.completedDate, weekStart, end)
+            );
             if (status !== 'done') {
               await removeWeekCompletion(
                 { activityLogs: infra.activityLogs },
                 { workspaceId, taskId: id, weekStart }
               );
+              if (removedLog !== undefined) {
+                await this.recordCompletionEvent(removedLog, 'uncompleted');
+              }
             }
             const saved = await setTaskStatusUseCase(
               { tasks: infra.tasks, clock: infra.clock },
@@ -512,6 +559,10 @@ export class AppStore {
             this.tasks = this.upsert(this.tasks, saved);
           }
           this.recomputeDerived();
+          const task = this.tasks.find((item) => item.id === id);
+          if (task !== undefined) {
+            await this.recordTaskEvent(task, 'status_changed', status);
+          }
         },
         () => {
           this.tasks = tasksBefore;
@@ -543,6 +594,14 @@ export class AppStore {
       );
       this.categories = this.upsert(this.categories, category);
       this.recomputeDerived();
+      await this.recordEvent({
+        action: 'created',
+        entityType: 'category',
+        entityId: category.id,
+        entityName: category.name,
+        contextName:
+          this.categories.find((item) => item.id === category.parentId)?.name ?? null
+      });
     });
   }
 
@@ -603,6 +662,13 @@ export class AppStore {
       this.topics = [...this.topics, ...createdTopics];
       this.tasks = [...this.tasks, ...createdTasks];
       this.recomputeDerived();
+      await this.recordEvent({
+        action: 'imported',
+        entityType: 'import',
+        entityId: input.name,
+        entityName: input.name,
+        detail: `${createdCategories.length} categories · ${createdTopics.length} topics · ${createdTasks.length} tasks`
+      });
     }
   }
 
@@ -620,6 +686,14 @@ export class AppStore {
       );
       this.topics = this.upsert(this.topics, topic);
       this.recomputeDerived();
+      await this.recordEvent({
+        action: 'created',
+        entityType: 'topic',
+        entityId: topic.id,
+        entityName: topic.name,
+        contextName:
+          this.categories.find((category) => category.id === topic.categoryId)?.name ?? null
+      });
     });
   }
 
@@ -650,10 +724,13 @@ export class AppStore {
       }
       this.tasks = this.upsert(this.tasks, task);
       this.recomputeDerived();
+      await this.recordTaskEvent(task, 'created');
     });
   }
 
   async removeCategory(categoryId: string): Promise<void> {
+    const categoryName =
+      this.categories.find((category) => category.id === categoryId)?.name ?? 'Category';
     const categoryIds = categoryDescendantIds(this.categories, asCategoryId(categoryId));
     const topicIds = new Set(
       this.topics
@@ -672,6 +749,12 @@ export class AppStore {
       this.topics = this.topics.filter((topic) => !topicIds.has(topic.id));
       this.tasks = this.tasks.filter((task) => !taskIds.includes(task.id));
       this.recomputeDerived();
+      await this.recordEvent({
+        action: 'deleted',
+        entityType: 'category',
+        entityId: categoryId,
+        entityName: categoryName
+      });
     });
   }
 
@@ -679,18 +762,31 @@ export class AppStore {
     if (this.tasks.some((task) => task.topicId === topicId)) {
       throw new Error('Remove tasks in this topic first.');
     }
+    const topic = this.topics.find((item) => item.id === topicId);
     await this.persist(async (infra, workspaceId) => {
       await infra.topics.delete(workspaceId, asTopicId(topicId));
-      this.topics = this.topics.filter((topic) => topic.id !== topicId);
+      this.topics = this.topics.filter((item) => item.id !== topicId);
       this.recomputeDerived();
+      if (topic !== undefined) {
+        await this.recordEvent({
+          action: 'deleted',
+          entityType: 'topic',
+          entityId: topic.id,
+          entityName: topic.name,
+          contextName:
+            this.categories.find((category) => category.id === topic.categoryId)?.name ?? null
+        });
+      }
     });
   }
 
   async removeTask(taskId: string): Promise<void> {
+    const task = this.tasks.find((item) => item.id === taskId);
     await this.persist(async (infra, workspaceId) => {
       await infra.tasks.delete(workspaceId, asTaskId(taskId));
-      this.tasks = this.tasks.filter((task) => task.id !== taskId);
+      this.tasks = this.tasks.filter((item) => item.id !== taskId);
       this.recomputeDerived();
+      if (task !== undefined) await this.recordTaskEvent(task, 'deleted');
     });
   }
 
@@ -714,6 +810,12 @@ export class AppStore {
       );
       this.categories = this.upsert(this.categories, category);
       this.recomputeDerived();
+      await this.recordEvent({
+        action: 'updated',
+        entityType: 'category',
+        entityId: category.id,
+        entityName: category.name
+      });
     });
   }
 
@@ -731,6 +833,12 @@ export class AppStore {
       );
       this.topics = this.upsert(this.topics, topic);
       this.recomputeDerived();
+      await this.recordEvent({
+        action: 'updated',
+        entityType: 'topic',
+        entityId: topic.id,
+        entityName: topic.name
+      });
     });
   }
 
@@ -760,6 +868,7 @@ export class AppStore {
       );
       this.tasks = this.upsert(this.tasks, task);
       this.recomputeDerived();
+      await this.recordTaskEvent(task, 'updated');
     });
   }
 
@@ -782,6 +891,12 @@ export class AppStore {
       );
       this.milestones = this.upsert(this.milestones, milestone);
       this.recomputeDerived();
+      await this.recordEvent({
+        action: 'created',
+        entityType: 'milestone',
+        entityId: milestone.id,
+        entityName: milestone.title
+      });
     });
   }
 
@@ -810,10 +925,17 @@ export class AppStore {
       );
       this.milestones = this.upsert(this.milestones, milestone);
       this.recomputeDerived();
+      await this.recordEvent({
+        action: 'updated',
+        entityType: 'milestone',
+        entityId: milestone.id,
+        entityName: milestone.title
+      });
     });
   }
 
   async removeMilestone(milestoneId: string): Promise<void> {
+    const milestone = this.milestones.find((item) => item.id === milestoneId);
     await this.persist(async (infra, workspaceId) => {
       await deleteMilestone(
         {
@@ -825,10 +947,16 @@ export class AppStore {
         },
         { workspaceId, milestoneId: asMilestoneId(milestoneId) }
       );
-      this.milestones = this.milestones.filter(
-        (milestone) => milestone.id !== milestoneId
-      );
+      this.milestones = this.milestones.filter((item) => item.id !== milestoneId);
       this.recomputeDerived();
+      if (milestone !== undefined) {
+        await this.recordEvent({
+          action: 'deleted',
+          entityType: 'milestone',
+          entityId: milestone.id,
+          entityName: milestone.title
+        });
+      }
     });
   }
 
@@ -867,6 +995,97 @@ export class AppStore {
 
   clearErrorOnInput(): void {
     if (this.error !== null) this.error = null;
+  }
+
+  private async recordEvent(input: {
+    action: ActivityAction;
+    entityType: ActivityEntityType;
+    entityId: string;
+    entityName: string;
+    contextName?: string | null;
+    detail?: string | null;
+  }): Promise<void> {
+    const workspaceId = this.workspace?.id;
+    const user = this.user;
+    if (workspaceId === undefined || user === null || !this.eventsAvailable) return;
+
+    try {
+      const infra = this.requireInfrastructure();
+      const event = await infra.activityEvents.save({
+        id: asActivityEventId(infra.ids.next()),
+        workspaceId,
+        actorId: user.id,
+        actorName: user.name ?? user.email,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        entityName: input.entityName,
+        contextName: input.contextName ?? null,
+        detail: input.detail ?? null,
+        createdAt: infra.clock.now().toISOString()
+      });
+      this.activityEvents = [event, ...this.activityEvents];
+    } catch (error) {
+      if (isNotFoundError(error)) this.eventsAvailable = false;
+    }
+  }
+
+  private async recordTaskEvent(
+    task: Task,
+    action: ActivityAction,
+    detail: string | null = null
+  ): Promise<void> {
+    const topic = this.topicForTask(task);
+    const category = this.categoryForTopic(topic);
+    await this.recordEvent({
+      action,
+      entityType: 'task',
+      entityId: task.id,
+      entityName: task.title,
+      contextName:
+        topic === undefined
+          ? null
+          : category === undefined
+            ? topic.name
+            : `${category.name} · ${topic.name}`,
+      detail
+    });
+  }
+
+  private async recordCompletionEvent(
+    log: ActivityLog,
+    action: 'completed' | 'uncompleted'
+  ): Promise<void> {
+    const task = this.tasks.find((item) => item.id === log.taskId);
+    const topic = task === undefined ? undefined : this.topicForTask(task);
+    const category = this.categoryForTopic(topic);
+    await this.recordEvent({
+      action,
+      entityType: 'completion',
+      entityId: log.id,
+      entityName: task?.title ?? 'Deleted task',
+      contextName:
+        topic === undefined
+          ? null
+          : category === undefined
+            ? topic.name
+            : `${category.name} · ${topic.name}`,
+      detail: log.completedDate
+    });
+  }
+
+  private async loadActivityEvents(
+    workspaceId: Workspace['id']
+  ): Promise<readonly ActivityEvent[]> {
+    try {
+      const events = await this.requireInfrastructure().activityEvents.listByWorkspace(workspaceId);
+      this.eventsAvailable = true;
+      return events;
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error;
+      this.eventsAvailable = false;
+      return [];
+    }
   }
 
   private async initialize(): Promise<void> {
@@ -915,13 +1134,15 @@ export class AppStore {
     const workspaceId = this.workspace?.id;
     if (workspaceId === undefined) return;
     this.today = toIsoDate(infra.clock.now());
-    const [categories, topics, tasks, milestones, activityLogs] = await Promise.all([
-      infra.categories.listByWorkspace(workspaceId),
-      infra.topics.listByWorkspace(workspaceId),
-      infra.tasks.listByWorkspace(workspaceId),
-      infra.milestones.listByWorkspace(workspaceId),
-      infra.activityLogs.listByWorkspace(workspaceId)
-    ]);
+    const [categories, topics, tasks, milestones, activityLogs, activityEvents] =
+      await Promise.all([
+        infra.categories.listByWorkspace(workspaceId),
+        infra.topics.listByWorkspace(workspaceId),
+        infra.tasks.listByWorkspace(workspaceId),
+        infra.milestones.listByWorkspace(workspaceId),
+        infra.activityLogs.listByWorkspace(workspaceId),
+        this.loadActivityEvents(workspaceId)
+      ]);
     if (token !== this.loadToken) return;
 
     this.categories = categories;
@@ -929,6 +1150,7 @@ export class AppStore {
     this.tasks = tasks;
     this.milestones = milestones;
     this.activityLogs = activityLogs;
+    this.activityEvents = activityEvents;
     await this.loadWeek(token);
   }
 
@@ -1055,6 +1277,7 @@ export class AppStore {
     this.milestones = [];
     this.milestoneProgress = [];
     this.activityLogs = [];
+    this.activityEvents = [];
     this.weekEntries = [];
     this.recommendation = EMPTY_RECOMMENDATION;
   }

@@ -8,6 +8,7 @@ export { AppwriteAuthAdapter } from './auth-adapter';
 export { readAppwriteConfig, type AppwriteConfig, type AppwritePublicEnv } from './config';
 export { isAppwriteException } from './errors';
 export {
+  AppwriteActivityEventRepository,
   AppwriteActivityLogRepository,
   AppwriteCategoryRepository,
   AppwriteMilestoneRepository,
