@@ -1,6 +1,7 @@
 import { endOfWeek, isWithinDateRange } from '../../domain/algorithms/week';
 import type { IsoDate, WeekStart } from '../../domain/models/common';
 import type { ActivityLog } from '../../domain/models/execution';
+import type { Task } from '../../domain/models/hierarchy';
 import type { TaskId, WeeklyPoolEntryId, WorkspaceId } from '../../domain/models/identifiers';
 import { asActivityLogId } from '../../domain/models/identifiers';
 import type { WeeklyPoolEntry } from '../../domain/models/planning';
@@ -68,26 +69,12 @@ export async function completeTask(
     throw new ConflictError('This task occurrence is already completed.');
   }
 
-  const topic =
-    deps.topics === undefined
-      ? null
-      : await deps.topics.findById(input.workspaceId, task.topicId);
-  const category =
-    topic === null || deps.categories === undefined
-      ? null
-      : await deps.categories.findById(input.workspaceId, topic.categoryId);
-
-  const log = await deps.activityLogs.save({
-    id: asActivityLogId(deps.ids.next()),
+  const log = await saveCompletionLog(deps, {
     workspaceId: input.workspaceId,
-    taskId: input.taskId,
+    task,
     entryId: entry.id,
     completedDate,
-    taskName: task.title,
-    topicName: topic?.name ?? null,
-    categoryName: category?.name ?? null,
-    note: optionalNote(input.note),
-    createdAt: deps.clock.now().toISOString(),
+    note: input.note,
   });
 
   await deps.weeklyPool.save({
@@ -97,6 +84,102 @@ export async function completeTask(
   });
 
   return log;
+}
+
+async function saveCompletionLog(
+  deps: ExecutionDependencies,
+  input: {
+    readonly workspaceId: WorkspaceId;
+    readonly task: Task;
+    readonly entryId: WeeklyPoolEntryId;
+    readonly completedDate: IsoDate;
+    readonly note?: string | undefined;
+  }
+): Promise<ActivityLog> {
+  const topic =
+    deps.topics === undefined
+      ? null
+      : await deps.topics.findById(input.workspaceId, input.task.topicId);
+  const category =
+    topic === null || deps.categories === undefined
+      ? null
+      : await deps.categories.findById(input.workspaceId, topic.categoryId);
+
+  return deps.activityLogs.save({
+    id: asActivityLogId(deps.ids.next()),
+    workspaceId: input.workspaceId,
+    taskId: input.task.id,
+    entryId: input.entryId,
+    completedDate: input.completedDate,
+    taskName: input.task.title,
+    topicName: topic?.name ?? null,
+    categoryName: category?.name ?? null,
+    note: optionalNote(input.note),
+    createdAt: deps.clock.now().toISOString(),
+  });
+}
+
+export interface RepeatTaskCompletionInput {
+  readonly workspaceId: WorkspaceId;
+  readonly entryId: WeeklyPoolEntryId;
+  readonly completedDate?: IsoDate;
+  readonly note?: string;
+}
+
+/** Logs another completion of the same weekly occurrence on the same day. */
+export async function repeatTaskCompletion(
+  deps: ExecutionDependencies,
+  input: RepeatTaskCompletionInput
+): Promise<ActivityLog> {
+  const entry = await deps.weeklyPool.findById(input.workspaceId, input.entryId);
+  if (entry === null) throw new NotFoundError('Weekly pool entry not found.');
+  if (entry.status !== 'done' || entry.completedDate === null) {
+    throw new ValidationError('Complete this occurrence before adding repeats.');
+  }
+
+  const completedDate = requireIsoDate(
+    input.completedDate ?? entry.completedDate,
+    'Completed date'
+  );
+  if (!isWithinDateRange(completedDate, entry.weekStart, endOfWeek(entry.weekStart))) {
+    throw new ValidationError('Completed date must fall inside the planned week.');
+  }
+
+  const task = await deps.tasks.findById(input.workspaceId, entry.taskId);
+  if (task === null) throw new NotFoundError('Task not found.');
+
+  return saveCompletionLog(deps, {
+    workspaceId: input.workspaceId,
+    task,
+    entryId: entry.id,
+    completedDate,
+    note: input.note,
+  });
+}
+
+export interface RemoveRepeatedCompletionInput {
+  readonly workspaceId: WorkspaceId;
+  readonly entryId: WeeklyPoolEntryId;
+}
+
+/** Removes the newest repeat, keeping the occurrence itself completed. */
+export async function removeRepeatedCompletion(
+  deps: Pick<ExecutionDependencies, 'weeklyPool' | 'activityLogs'>,
+  input: RemoveRepeatedCompletionInput
+): Promise<ActivityLog> {
+  const entry = await deps.weeklyPool.findById(input.workspaceId, input.entryId);
+  if (entry === null) throw new NotFoundError('Weekly pool entry not found.');
+
+  const logs = (await deps.activityLogs.listByTask(input.workspaceId, entry.taskId))
+    .filter((log) => log.entryId === entry.id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const latest = logs.at(-1);
+  if (logs.length <= 1 || latest === undefined) {
+    throw new ValidationError('Change the status instead of removing the only completion.');
+  }
+
+  await deps.activityLogs.delete(input.workspaceId, latest.id);
+  return latest;
 }
 
 async function resolveEntry(

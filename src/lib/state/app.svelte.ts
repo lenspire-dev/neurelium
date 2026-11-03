@@ -64,7 +64,9 @@ import {
   createTopic,
   deleteMilestone,
   moveWeeklyPoolEntry,
+  removeRepeatedCompletion,
   removeWeeklyPoolEntry,
+  repeatTaskCompletion,
   scheduleWeeklyPoolEntry,
   setTaskStatus as setTaskStatusUseCase,
   setWeeklyEntryStatus,
@@ -698,6 +700,48 @@ export class AppStore {
         }
       )
     );
+  }
+
+  entryCompletionCount(entryId: string): number {
+    return this.activityLogs.filter((log) => log.entryId === entryId).length;
+  }
+
+  async addEntryRepeat(entryId: string): Promise<void> {
+    const id = asWeeklyPoolEntryId(entryId);
+    const entry = this.weekEntries.find((item) => item.id === id);
+    if (entry === undefined || entry.status !== 'done') return;
+
+    await this.persist(async (infra, workspaceId) => {
+      const log = await repeatTaskCompletion(
+        {
+          tasks: infra.tasks,
+          weeklyPool: infra.weeklyPool,
+          activityLogs: infra.activityLogs,
+          topics: infra.topics,
+          categories: infra.categories,
+          clock: infra.clock,
+          ids: infra.ids
+        },
+        { workspaceId, entryId: id }
+      );
+      this.activityLogs = [...this.activityLogs, log];
+      this.recomputeDerived();
+      await this.recordCompletionEvent(log, 'completed');
+    });
+  }
+
+  async removeEntryRepeat(entryId: string): Promise<void> {
+    const id = asWeeklyPoolEntryId(entryId);
+    if (this.entryCompletionCount(entryId) <= 1) return;
+
+    await this.persist(async (infra, workspaceId) => {
+      const removed = await removeRepeatedCompletion(
+        { weeklyPool: infra.weeklyPool, activityLogs: infra.activityLogs },
+        { workspaceId, entryId: id }
+      );
+      this.activityLogs = this.activityLogs.filter((log) => log.id !== removed.id);
+      this.recomputeDerived();
+    });
   }
 
   async setTaskStatus(

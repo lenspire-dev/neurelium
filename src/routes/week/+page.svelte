@@ -41,6 +41,8 @@
     ChevronRight,
     GripVertical,
     Inbox,
+    Minus,
+    Plus,
     Trash2
   } from '@lucide/svelte';
 
@@ -229,6 +231,31 @@
               </option>
             {/each}
           </select>
+          {#if item.entry.status === 'done'}
+            <div class="flex h-10 items-center rounded-md border bg-background">
+              <button
+                type="button"
+                class="grid size-7 place-items-center rounded-l-md text-muted-foreground hover:bg-muted disabled:opacity-40"
+                aria-label="Remove one completion of {item.task.title} from this day"
+                disabled={app.busy || !canComplete || app.entryCompletionCount(item.entry.id) <= 1}
+                onclick={() => app.removeEntryRepeat(item.entry.id)}
+              >
+                <Minus class="size-3" />
+              </button>
+              <span class="min-w-5 text-center text-xs font-medium">
+                {app.entryCompletionCount(item.entry.id)}×
+              </span>
+              <button
+                type="button"
+                class="grid size-7 place-items-center rounded-r-md text-muted-foreground hover:bg-muted disabled:opacity-40"
+                aria-label="Add one completion of {item.task.title} on this day"
+                disabled={app.busy || !canComplete}
+                onclick={() => app.addEntryRepeat(item.entry.id)}
+              >
+                <Plus class="size-3" />
+              </button>
+            </div>
+          {/if}
           <select
             class="h-10 rounded-md border bg-background px-2 text-xs text-muted-foreground"
             value={item.entry.plannedDate ?? 'week-todo'}

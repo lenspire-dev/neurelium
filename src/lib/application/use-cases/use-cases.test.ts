@@ -19,7 +19,13 @@ import type { TaskRepository } from '../../domain/ports/task-repository';
 import type { TopicRepository } from '../../domain/ports/topic-repository';
 import type { WeeklyPoolRepository } from '../../domain/ports/weekly-pool-repository';
 import { getMilestoneProgress, getStudyRecommendation } from './analytics';
-import { completeTask, removeWeekCompletion, setWeeklyEntryStatus } from './execution';
+import {
+  completeTask,
+  removeRepeatedCompletion,
+  removeWeekCompletion,
+  repeatTaskCompletion,
+  setWeeklyEntryStatus
+} from './execution';
 import {
   createCategory,
   createTask,
@@ -440,6 +446,39 @@ describe('execution use cases', () => {
     expect(reopened.entry.status).toBe('in_progress');
     expect(reopened.entry.completedDate).toBeNull();
     expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(0);
+  });
+
+  test('adds and removes repeated completions on the same day', async () => {
+    const harness = createHarness();
+    const { task } = await seedTask(harness, 'Math', 5);
+    const entry = await addTaskToWeek(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+    });
+    await completeTask(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+      completedDate: '2026-10-28',
+      entryId: entry.id,
+    });
+
+    await repeatTaskCompletion(harness, { workspaceId, entryId: entry.id });
+    await repeatTaskCompletion(harness, { workspaceId, entryId: entry.id });
+
+    expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(3);
+
+    await removeRepeatedCompletion(harness, { workspaceId, entryId: entry.id });
+
+    expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(2);
+    expect((await harness.weeklyPool.findById(workspaceId, entry.id))?.status).toBe('done');
+    await expect(
+      removeRepeatedCompletion(harness, { workspaceId, entryId: entry.id })
+    ).resolves.toBeDefined();
+    await expect(
+      removeRepeatedCompletion(harness, { workspaceId, entryId: entry.id })
+    ).rejects.toThrow('only completion');
   });
 
   test('rejects completions outside the planned week', async () => {
