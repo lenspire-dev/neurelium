@@ -204,21 +204,29 @@
               <UserRound class="size-4" aria-hidden="true" />
             </a>
             <div class="min-w-0 flex-1">
-              <p class="truncate text-sm font-medium">{app.user.name ?? 'Student'}</p>
+              <a
+                href="/account"
+                onclick={closeMenu}
+                class="block truncate text-sm font-medium hover:underline"
+              >
+                {app.user.name ?? 'Student'}
+              </a>
               <div class="flex items-center gap-1">
-                <p class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                <a
+                  href="/account"
+                  onclick={closeMenu}
+                  class="min-w-0 flex-1 truncate text-xs text-muted-foreground hover:underline"
+                >
                   {app.user.email}
-                </p>
-                <Button
+                </a>
+                <a
                   href="/settings"
                   onclick={closeMenu}
-                  variant="ghost"
-                  size="icon-xs"
-                  class="-my-1 shrink-0"
                   aria-label="Settings"
+                  class="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
                   <Settings class="size-3.5" />
-                </Button>
+                </a>
               </div>
             </div>
           </div>
