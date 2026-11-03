@@ -212,7 +212,7 @@
           <select
             class={cn(
               'h-10 w-28 rounded-md border px-2 text-xs font-medium',
-              taskStatusMeta(item.task.status).badgeClass
+              taskStatusMeta(item.entry.status).badgeClass
             )}
             value={item.entry.status}
             aria-label="Status for {item.task.title} this week"
