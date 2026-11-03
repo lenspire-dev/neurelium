@@ -14,6 +14,20 @@
   onMount(() => {
     theme.init();
     void app.init();
+
+    let lastSync = Date.now();
+    const sync = () => {
+      if (document.visibilityState !== 'visible' || app.session !== 'signed-in') return;
+      if (app.busy || Date.now() - lastSync < 30_000) return;
+      lastSync = Date.now();
+      void app.refresh();
+    };
+    document.addEventListener('visibilitychange', sync);
+    window.addEventListener('focus', sync);
+    return () => {
+      document.removeEventListener('visibilitychange', sync);
+      window.removeEventListener('focus', sync);
+    };
   });
 </script>
 
