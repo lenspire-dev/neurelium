@@ -128,11 +128,11 @@
     </div>
 
     <div class="mt-4 grid gap-4 sm:grid-cols-2">
-      <div class="sm:col-span-2">
+      <div class="sm:col-span-2 space-y-2">
         <Label for="workspace-name">Name</Label>
         <Input id="workspace-name" bind:value={workspaceName} maxlength={80} />
       </div>
-      <div>
+      <div class="space-y-2">
         <Label for="default-view">Default view</Label>
         <select id="default-view" class={selectClass} bind:value={defaultView}>
           <option value="day">Today</option>
@@ -142,7 +142,7 @@
       <div class="sm:col-span-2">
         <p class="text-xs text-muted-foreground">Weeks start on Monday.</p>
       </div>
-      <div class="sm:col-span-2">
+      <div class="sm:col-span-2 space-y-2">
         <Label for="override-mode">Category status overrides</Label>
         <select
           id="override-mode"
@@ -248,7 +248,7 @@
 
     {#if app.workspaceRole === 'owner'}
       <div class="mt-4 grid gap-3 rounded-xl bg-muted/50 p-3 sm:grid-cols-[1fr_auto_auto]">
-        <div>
+        <div class="space-y-2">
           <Label for="invite-email">Invite by email</Label>
           <Input
             id="invite-email"
@@ -257,7 +257,7 @@
             placeholder="teammate@example.com"
           />
         </div>
-        <div>
+        <div class="space-y-2">
           <Label for="invite-role">Role</Label>
           <select id="invite-role" class={selectClass} bind:value={inviteRole}>
             <option value="admin">Admin</option>
