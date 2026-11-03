@@ -1,8 +1,9 @@
-import { Account, Client, Functions, TablesDB, Teams } from 'appwrite';
+import { Account, Channel, Client, Functions, TablesDB, Teams } from 'appwrite';
 import { AppwriteAuthAdapter } from './auth-adapter';
 import { readAppwriteConfig, type AppwriteConfig, type AppwritePublicEnv } from './config';
 import { createAppwriteRepositories } from './repositories';
 import { AppwriteIdGenerator, SystemClock } from './runtime';
+import { APPWRITE_TABLES } from './schema';
 import { AppwriteWorkspaceTeamAdapter } from './workspace-team-adapter';
 
 export { AppwriteAuthAdapter } from './auth-adapter';
@@ -41,6 +42,9 @@ function buildInfrastructure(config: AppwriteConfig) {
   const teams = new Teams(client);
   const functions = new Functions(client);
   const auth = new AppwriteAuthAdapter(account);
+  const channels = Object.values(APPWRITE_TABLES).map((tableId) =>
+    Channel.tablesdb(config.databaseId).table(tableId).row().toString()
+  );
 
   return {
     client,
@@ -48,6 +52,7 @@ function buildInfrastructure(config: AppwriteConfig) {
     teams,
     functions,
     importFunctionId: config.importFunctionId,
+    subscribeToWorkspaceRows: (callback: () => void) => client.subscribe(channels, callback),
     auth,
     team: new AppwriteWorkspaceTeamAdapter(teams),
     ...createAppwriteRepositories(tables, config.databaseId, auth),

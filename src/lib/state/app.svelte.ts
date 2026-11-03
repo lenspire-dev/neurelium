@@ -135,6 +135,8 @@ export class AppStore {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private optimisticSeq = 0;
   private eventsAvailable = true;
+  private realtimeUnsubscribe: (() => void) | null = null;
+  private realtimeWorkspaceId: string | null = null;
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -1497,6 +1499,7 @@ export class AppStore {
     this.activityLogs = activityLogs;
     this.activityEvents = activityEvents;
     this.members = members;
+    this.startRealtime();
     await this.loadWeek(token);
   }
 
@@ -1576,6 +1579,22 @@ export class AppStore {
     );
   }
 
+  private startRealtime(): void {
+    const workspace = this.workspace;
+    if (workspace === null || this.realtimeWorkspaceId === workspace.id) return;
+    this.stopRealtime();
+    this.realtimeUnsubscribe = this.requireInfrastructure().subscribeToWorkspaceRows(
+      () => this.scheduleRefresh()
+    );
+    this.realtimeWorkspaceId = workspace.id;
+  }
+
+  private stopRealtime(): void {
+    this.realtimeUnsubscribe?.();
+    this.realtimeUnsubscribe = null;
+    this.realtimeWorkspaceId = null;
+  }
+
   private scheduleRefresh(): void {
     if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
     this.refreshTimer = setTimeout(() => {
@@ -1629,6 +1648,7 @@ export class AppStore {
   }
 
   private clearWorkspaceData(): void {
+    this.stopRealtime();
     this.categories = [];
     this.topics = [];
     this.tasks = [];
