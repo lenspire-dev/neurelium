@@ -207,9 +207,14 @@
               <a
                 href="/account"
                 onclick={closeMenu}
-                class="block truncate text-sm font-medium hover:underline"
+                class="flex items-center gap-1.5 text-sm font-medium hover:underline"
               >
-                {app.user.name ?? 'Student'}
+                <span class="truncate">{app.user.name ?? 'Student'}</span>
+                <span
+                  class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                >
+                  {app.workspaceRole}
+                </span>
               </a>
               <div class="flex items-center gap-1">
                 <a
