@@ -6,7 +6,7 @@
   import ThemeToggle from './theme-toggle.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { Input } from '#lib/components/ui/input/index.js';
-  import { LoaderCircle, LogOut, Menu, Plus, RefreshCw, X } from '@lucide/svelte';
+  import { LoaderCircle, LogOut, Menu, Plus, RefreshCw, Settings, UserRound, X } from '@lucide/svelte';
 
   let { children }: { children: Snippet } = $props();
   let menuOpen = $state(false);
@@ -193,9 +193,35 @@
         <ThemeToggle />
       </div>
       {#if app.user}
-        <div class="rounded-lg border bg-background p-3">
-          <p class="truncate text-sm font-medium">{app.user.name ?? 'Student'}</p>
-          <p class="truncate text-xs text-muted-foreground">{app.user.email}</p>
+        <div class="rounded-lg border bg-background p-2">
+          <div class="flex items-center gap-2">
+            <a
+              href="/account"
+              onclick={closeMenu}
+              aria-label="Account"
+              class="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <UserRound class="size-4" aria-hidden="true" />
+            </a>
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-sm font-medium">{app.user.name ?? 'Student'}</p>
+              <div class="flex items-center gap-1">
+                <p class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {app.user.email}
+                </p>
+                <Button
+                  href="/settings"
+                  onclick={closeMenu}
+                  variant="ghost"
+                  size="icon-xs"
+                  class="-my-1 shrink-0"
+                  aria-label="Settings"
+                >
+                  <Settings class="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          </div>
         </div>
       {/if}
       <div class="grid grid-cols-2 gap-2">

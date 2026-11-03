@@ -1,14 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import {
-    CalendarDays,
-    History,
-    LayoutDashboard,
-    ListTree,
-    Settings,
-    Target,
-    UserRound
-  } from '@lucide/svelte';
+  import { CalendarDays, History, LayoutDashboard, ListTree, Target } from '@lucide/svelte';
 
   let { onNavigate }: { onNavigate?: () => void } = $props();
 
@@ -17,9 +9,7 @@
     { href: '/hierarchy', label: 'Hierarchy', icon: ListTree },
     { href: '/week', label: 'Week', icon: CalendarDays },
     { href: '/milestones', label: 'Milestones', icon: Target },
-    { href: '/logs', label: 'Activity', icon: History },
-    { href: '/account', label: 'Account', icon: UserRound },
-    { href: '/settings', label: 'Settings', icon: Settings }
+    { href: '/logs', label: 'Activity', icon: History }
   ];
 
   function isActive(href: string): boolean {
