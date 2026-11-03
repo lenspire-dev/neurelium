@@ -1407,6 +1407,17 @@ export class AppStore {
     });
   }
 
+  private async loadMembersForRole(): Promise<readonly WorkspaceMember[]> {
+    const workspace = this.workspace;
+    if (workspace === null) return [];
+    try {
+      return await this.requireInfrastructure().team.listMembers(workspace);
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error;
+      return [];
+    }
+  }
+
   private async loadActivityEvents(
     workspaceId: Workspace['id']
   ): Promise<readonly ActivityEvent[]> {
@@ -1467,14 +1478,15 @@ export class AppStore {
     const workspaceId = this.workspace?.id;
     if (workspaceId === undefined) return;
     this.today = toIsoDate(infra.clock.now());
-    const [categories, topics, tasks, milestones, activityLogs, activityEvents] =
+    const [categories, topics, tasks, milestones, activityLogs, activityEvents, members] =
       await Promise.all([
         infra.categories.listByWorkspace(workspaceId),
         infra.topics.listByWorkspace(workspaceId),
         infra.tasks.listByWorkspace(workspaceId),
         infra.milestones.listByWorkspace(workspaceId),
         infra.activityLogs.listByWorkspace(workspaceId),
-        this.loadActivityEvents(workspaceId)
+        this.loadActivityEvents(workspaceId),
+        this.loadMembersForRole()
       ]);
     if (token !== this.loadToken) return;
 
@@ -1484,6 +1496,7 @@ export class AppStore {
     this.milestones = milestones;
     this.activityLogs = activityLogs;
     this.activityEvents = activityEvents;
+    this.members = members;
     await this.loadWeek(token);
   }
 
