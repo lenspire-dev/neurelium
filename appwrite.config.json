@@ -1,4 +1,33 @@
 {
     "projectId": "neurelium",
-    "endpoint": "https://fra.cloud.appwrite.io/v1"
+    "endpoint": "https://fra.cloud.appwrite.io/v1",
+    "functions": [
+        {
+            "$id": "import-tree",
+            "name": "Import category tree",
+            "runtime": "node-22",
+            "path": "functions/import-tree",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "execute": [
+                "users"
+            ],
+            "events": [],
+            "schedule": "",
+            "interval": 0,
+            "timeout": 60,
+            "enabled": true,
+            "logging": true,
+            "scopes": [
+                "rows.read",
+                "rows.write",
+                "teams.read"
+            ],
+            "ignore": [
+                "node_modules",
+                ".git"
+            ],
+            "vars": []
+        }
+    ]
 }
