@@ -77,6 +77,14 @@ import {
 type Infrastructure = ReturnType<typeof createAppwriteInfrastructureFromEnv>;
 type SessionState = 'loading' | 'signed-out' | 'signed-in';
 
+interface ImportFunctionResult {
+  readonly ok?: boolean;
+  readonly error?: string;
+  readonly categories?: number;
+  readonly topics?: number;
+  readonly tasks?: number;
+}
+
 const EMPTY_RECOMMENDATION: RecommendationResult = { primary: null, alternatives: [] };
 const ACTIVE_WORKSPACE_KEY = 'neurelium-active-workspace';
 
@@ -903,6 +911,29 @@ export class AppStore {
   }
 
   async importCategoryTree(input: ImportCategory): Promise<void> {
+    const infrastructure = this.requireInfrastructure();
+    const workspaceId = this.workspace?.id;
+    if (workspaceId !== undefined && infrastructure.importFunctionId !== null) {
+      await this.withBusy(async () => {
+        const execution = await infrastructure.functions.createExecution({
+          functionId: infrastructure.importFunctionId!,
+          body: JSON.stringify({ workspaceId, tree: input }),
+          headers: { 'content-type': 'application/json' }
+        });
+        let result: ImportFunctionResult;
+        try {
+          result = JSON.parse(execution.responseBody) as ImportFunctionResult;
+        } catch {
+          throw new Error('Import function returned an invalid response.');
+        }
+        if (execution.responseStatusCode >= 400 || result.ok !== true) {
+          throw new Error(result.error ?? 'Import failed.');
+        }
+        await this.reload(++this.loadToken);
+      });
+      return;
+    }
+
     const createdCategories: Category[] = [];
     const createdTopics: Topic[] = [];
     const createdTasks: Task[] = [];

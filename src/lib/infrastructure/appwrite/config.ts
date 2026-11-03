@@ -1,9 +1,12 @@
 import { DEFAULT_APPWRITE_DATABASE_ID } from './schema';
 
+export const IMPORT_FUNCTION_ID = 'import-tree';
+
 export interface AppwriteConfig {
   readonly endpoint: string;
   readonly projectId: string;
   readonly databaseId: string;
+  readonly importFunctionId: string | null;
 }
 
 export interface AppwritePublicEnv {
@@ -32,6 +35,7 @@ export function readAppwriteConfig(env: AppwritePublicEnv): AppwriteConfig {
   return {
     endpoint: endpoint.replace(/\/+$/, ''),
     projectId,
-    databaseId: env.PUBLIC_APPWRITE_DATABASE_ID?.trim() || DEFAULT_APPWRITE_DATABASE_ID
+    databaseId: env.PUBLIC_APPWRITE_DATABASE_ID?.trim() || DEFAULT_APPWRITE_DATABASE_ID,
+    importFunctionId: IMPORT_FUNCTION_ID
   };
 }

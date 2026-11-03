@@ -1,4 +1,4 @@
-import { Account, Client, TablesDB, Teams } from 'appwrite';
+import { Account, Client, Functions, TablesDB, Teams } from 'appwrite';
 import { AppwriteAuthAdapter } from './auth-adapter';
 import { readAppwriteConfig, type AppwriteConfig, type AppwritePublicEnv } from './config';
 import { createAppwriteRepositories } from './repositories';
@@ -39,12 +39,15 @@ function buildInfrastructure(config: AppwriteConfig) {
   const account = new Account(client);
   const tables = new TablesDB(client);
   const teams = new Teams(client);
+  const functions = new Functions(client);
   const auth = new AppwriteAuthAdapter(account);
 
   return {
     client,
     tables,
     teams,
+    functions,
+    importFunctionId: config.importFunctionId,
     auth,
     team: new AppwriteWorkspaceTeamAdapter(teams),
     ...createAppwriteRepositories(tables, config.databaseId, auth),

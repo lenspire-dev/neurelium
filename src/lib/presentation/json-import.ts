@@ -21,6 +21,27 @@ export interface ImportCategory {
   readonly subcategories: readonly ImportCategory[];
 }
 
+export interface ImportCounts {
+  readonly categories: number;
+  readonly topics: number;
+  readonly tasks: number;
+}
+
+export function countCategoryImport(input: ImportCategory): ImportCounts {
+  let categories = 1;
+  let topics = input.topics.length;
+  let tasks = input.topics.reduce((sum, topic) => sum + topic.tasks.length, 0);
+
+  for (const child of input.subcategories) {
+    const counts = countCategoryImport(child);
+    categories += counts.categories;
+    topics += counts.topics;
+    tasks += counts.tasks;
+  }
+
+  return { categories, topics, tasks };
+}
+
 function record(value: unknown, path: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`${path} must be an object.`);

@@ -11,7 +11,8 @@ describe('readAppwriteConfig', () => {
     expect(readAppwriteConfig(env)).toEqual({
       endpoint: 'https://cloud.appwrite.io/v1',
       projectId: 'project',
-      databaseId: 'neurelium'
+      databaseId: 'neurelium',
+      importFunctionId: 'import-tree'
     });
   });
 

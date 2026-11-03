@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseCategoryImport } from './json-import';
+import { countCategoryImport, parseCategoryImport } from './json-import';
 
 describe('parseCategoryImport', () => {
   test('parses nested categories, topics, and tasks with weight defaults', () => {
@@ -35,6 +35,25 @@ describe('parseCategoryImport', () => {
     expect(result.subcategories[0]?.weight).toBe(4);
     expect(result.subcategories[0]?.topics[0]?.tasks.map((task) => task.weight)).toEqual([3, 2]);
     expect(result.subcategories[0]?.topics[0]?.tasks[0]?.icon).toBe('🧮');
+  });
+
+  test('counts the full tree', () => {
+    const result = parseCategoryImport(`
+      {
+        "name": "Math",
+        "topics": [{ "name": "Numbers", "tasks": [{ "title": "Read" }] }],
+        "subcategories": [
+          {
+            "name": "Algebra",
+            "topics": [
+              { "name": "Equations", "tasks": [{ "title": "Solve" }, { "title": "Check" }] }
+            ]
+          }
+        ]
+      }
+    `);
+
+    expect(countCategoryImport(result)).toEqual({ categories: 2, topics: 2, tasks: 3 });
   });
 
   test('rejects invalid weights and malformed JSON', () => {

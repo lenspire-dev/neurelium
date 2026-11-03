@@ -17,7 +17,7 @@
     hashCategoryColor,
     suggestCategoryColor
   } from '#lib/presentation/category-color.js';
-  import { parseCategoryImport } from '#lib/presentation/json-import.js';
+  import { countCategoryImport, parseCategoryImport } from '#lib/presentation/json-import.js';
 import { calculateCategoryStatus } from '#lib/domain/algorithms/category-status.js';
   import { formatDate, formatTimestamp } from '#lib/presentation/format.js';
   import { TASK_STATUS_META } from '#lib/presentation/task-status.js';
@@ -94,6 +94,37 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
   let importDialogOpen = $state(false);
   let importJson = $state('');
   let importError = $state<string | null>(null);
+
+  const IMPORT_TEMPLATE = JSON.stringify(
+    {
+      name: 'Mathematics',
+      icon: '📐',
+      weight: 3,
+      subcategories: [
+        {
+          name: 'Algebra',
+          icon: '🧮',
+          topics: [
+            {
+              name: 'Equations',
+              tasks: [{ title: 'Solve exercises', icon: '✏️', weight: 2 }]
+            }
+          ]
+        }
+      ]
+    },
+    null,
+    2
+  );
+
+  let importPreview = $derived.by(() => {
+    if (importJson.trim() === '') return null;
+    try {
+      return countCategoryImport(parseCategoryImport(importJson));
+    } catch {
+      return null;
+    }
+  });
 
   let categoryColors = $derived(buildCategoryColorMap(app.categories));
   let childIds = $derived(categoryChildIds(app.categories));
@@ -280,6 +311,15 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
     if (file === undefined) return;
     importJson = await file.text();
     importError = null;
+  }
+
+  function downloadImportTemplate() {
+    const url = URL.createObjectURL(new Blob([IMPORT_TEMPLATE], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'neurelium-import-template.json';
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   async function submitImport(event: SubmitEvent) {
@@ -765,7 +805,12 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
 >
   <form class="space-y-4" onsubmit={submitImport}>
     <div class="space-y-2">
-      <Label for="import-file">JSON file</Label>
+      <div class="flex items-center justify-between gap-2">
+        <Label for="import-file">JSON file</Label>
+        <Button type="button" size="sm" variant="ghost" onclick={downloadImportTemplate}>
+          Download template
+        </Button>
+      </div>
       <Input
         id="import-file"
         type="file"
@@ -802,6 +847,16 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
       <p class="text-xs text-muted-foreground">
         Icons are optional emoji. Weights use grades 1–5 and default to 2 when omitted. Tasks belong inside topics.
       </p>
+      {#if importPreview !== null}
+        <p class="text-xs font-medium">
+          {importPreview.categories}
+          {importPreview.categories === 1 ? 'category' : 'categories'} ·
+          {importPreview.topics}
+          {importPreview.topics === 1 ? 'topic' : 'topics'} ·
+          {importPreview.tasks}
+          {importPreview.tasks === 1 ? 'task' : 'tasks'}
+        </p>
+      {/if}
     </div>
     {#if importError !== null}
       <p class="text-sm text-destructive" role="alert">{importError}</p>
@@ -810,7 +865,9 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
       <Button type="button" variant="outline" onclick={() => (importDialogOpen = false)}>
         Cancel
       </Button>
-      <Button type="submit" disabled={app.busy || importJson.trim() === ''}>Import</Button>
+      <Button type="submit" disabled={app.busy || importJson.trim() === ''}>
+        {app.busy ? 'Importing…' : 'Import'}
+      </Button>
     </div>
   </form>
 </Modal>
