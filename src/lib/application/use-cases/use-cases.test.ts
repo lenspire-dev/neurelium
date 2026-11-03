@@ -37,6 +37,7 @@ import { createMilestone } from './milestones';
 import {
   addTaskToWeek,
   previewWeekRollover,
+  removeWeeklyPoolEntry,
   rolloverWeek,
 } from './planning';
 
@@ -328,6 +329,34 @@ describe('planning use cases', () => {
     await addTaskToWeek(harness, { workspaceId, taskId: task.id, weekStart: nextWeek });
 
     expect(await harness.weeklyPool.listByTask(workspaceId, task.id)).toHaveLength(3);
+  });
+
+  test('removing a week entry resets the task status and clears its completions', async () => {
+    const harness = createHarness();
+    const { task } = await seedTask(harness, 'Math', 5);
+    const entry = await addTaskToWeek(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+    });
+    await completeTask(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+      completedDate: '2026-10-28',
+      entryId: entry.id,
+    });
+    await setTaskStatus(harness, { workspaceId, taskId: task.id, status: 'done' });
+
+    const result = await removeWeeklyPoolEntry(harness, {
+      workspaceId,
+      entryId: entry.id,
+    });
+
+    expect(result.task?.status).toBe('todo');
+    expect(result.task?.doneDate).toBeNull();
+    expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(0);
+    expect(await harness.weeklyPool.findById(workspaceId, entry.id)).toBeNull();
   });
 
   test('rolls over only incomplete tasks', async () => {

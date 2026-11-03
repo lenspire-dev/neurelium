@@ -3,6 +3,7 @@ import type { IsoDate, WeekStart } from '../../domain/models/common';
 import type { TaskId, WeeklyPoolEntryId, WorkspaceId } from '../../domain/models/identifiers';
 import { asWeeklyPoolEntryId } from '../../domain/models/identifiers';
 import type { WeeklyPoolEntry } from '../../domain/models/planning';
+import type { Task } from '../../domain/models/hierarchy';
 import type { ActivityLogRepository } from '../../domain/ports/activity-log-repository';
 import type { ClockPort } from '../../domain/ports/clock-port';
 import type { IdGeneratorPort } from '../../domain/ports/id-generator-port';
@@ -10,6 +11,7 @@ import type { TaskRepository } from '../../domain/ports/task-repository';
 import type { WeeklyPoolRepository } from '../../domain/ports/weekly-pool-repository';
 import { NotFoundError, ValidationError } from '../errors';
 import { requireIsoDate, requireWeekStart } from '../validation';
+import { setTaskStatus } from './hierarchy';
 
 export interface PlanningDependencies {
   readonly weeklyPool: WeeklyPoolRepository;
@@ -97,13 +99,36 @@ export interface RemoveWeeklyPoolEntryInput {
   readonly entryId: WeeklyPoolEntryId;
 }
 
+export interface RemoveWeeklyPoolEntryResult {
+  readonly task: Task | null;
+}
+
 export async function removeWeeklyPoolEntry(
   deps: PlanningDependencies,
   input: RemoveWeeklyPoolEntryInput
-): Promise<void> {
+): Promise<RemoveWeeklyPoolEntryResult> {
   const entry = await deps.weeklyPool.findById(input.workspaceId, input.entryId);
   if (entry === null) throw new NotFoundError('Weekly pool entry not found.');
+
+  const logs = await deps.activityLogs.listByTask(input.workspaceId, entry.taskId);
+  for (const log of logs) {
+    if (log.entryId === entry.id) {
+      await deps.activityLogs.delete(input.workspaceId, log.id);
+    }
+  }
+
+  const task = await deps.tasks.findById(input.workspaceId, entry.taskId);
+  const resetTask =
+    task === null || task.status === 'todo'
+      ? task
+      : await setTaskStatus(deps, {
+          workspaceId: input.workspaceId,
+          taskId: entry.taskId,
+          status: 'todo',
+        });
+
   await deps.weeklyPool.delete(input.workspaceId, input.entryId);
+  return { task: resetTask };
 }
 
 export interface WeekRolloverPreview {

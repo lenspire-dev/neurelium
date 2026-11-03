@@ -167,11 +167,6 @@
     await app.removeEntry(id);
   }
 
-  async function moveEntry(id: string, target: string) {
-    if (target === 'next') await app.moveEntryToNextWeek(id);
-    else await app.scheduleEntry(id, target === 'week-todo' ? null : target);
-  }
-
 </script>
 
   {#snippet taskCard(item: PoolItem, showToday = false)}
@@ -256,20 +251,6 @@
               </button>
             </div>
           {/if}
-          <select
-            class="h-10 rounded-md border bg-background px-2 text-xs text-muted-foreground"
-            value={item.entry.plannedDate ?? 'week-todo'}
-            aria-label="Move {item.task.title} to another day"
-            disabled={app.busy}
-            onchange={(event) =>
-              moveEntry(item.entry.id, (event.currentTarget as HTMLSelectElement).value)}
-          >
-            <option value="week-todo">To do this week</option>
-            {#each days as day (day)}
-              <option value={day}>{formatWeekday(day)} {parseIsoDate(day).getUTCDate()}</option>
-            {/each}
-            <option value="next">Next week</option>
-          </select>
           <Button
             variant="ghost"
             size="sm"

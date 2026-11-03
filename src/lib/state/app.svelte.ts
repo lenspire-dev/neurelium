@@ -7,7 +7,6 @@ import {
   addDays,
   endOfWeek,
   isWithinDateRange,
-  nextWeekStart,
   startOfWeek,
   toIsoDate
 } from '#lib/domain/algorithms/week.js';
@@ -63,7 +62,6 @@ import {
   createTask,
   createTopic,
   deleteMilestone,
-  moveWeeklyPoolEntry,
   removeRepeatedCompletion,
   removeWeeklyPoolEntry,
   repeatTaskCompletion,
@@ -559,45 +557,6 @@ export class AppStore {
     );
   }
 
-  async moveEntryToNextWeek(entryId: string): Promise<void> {
-    const id = asWeeklyPoolEntryId(entryId);
-    const entry = this.weekEntries.find((item) => item.id === id);
-    if (entry === undefined) return;
-    const target = nextWeekStart(this.weekStart);
-    const previous = this.weekEntries;
-    this.weekEntries = this.weekEntries.filter((item) => item.id !== id);
-    this.recomputeDerived();
-
-    await this.queueWrite(`entry:${entryId}`, () =>
-      this.withBusy(
-        async () => {
-          const infra = this.requireInfrastructure();
-          const workspaceId = this.workspace?.id;
-          if (workspaceId === undefined) return;
-          await moveWeeklyPoolEntry(
-            {
-              weeklyPool: infra.weeklyPool,
-              tasks: infra.tasks,
-              activityLogs: infra.activityLogs,
-              clock: infra.clock,
-              ids: infra.ids
-            },
-            { workspaceId, entryId: id, weekStart: target }
-          );
-          const task = this.tasks.find((item) => item.id === entry.taskId);
-          if (task !== undefined) {
-            await this.recordTaskEvent(task, 'moved', `Week of ${target}`);
-          }
-        },
-        () => {
-          this.weekEntries = previous;
-          this.recomputeDerived();
-          this.scheduleRefresh();
-        }
-      )
-    );
-  }
-
   async removeEntry(entryId: string): Promise<void> {
     const id = asWeeklyPoolEntryId(entryId);
     const previous = this.weekEntries;
@@ -612,7 +571,7 @@ export class AppStore {
           const infra = this.requireInfrastructure();
           const workspaceId = this.workspace?.id;
           if (workspaceId === undefined) return;
-          await removeWeeklyPoolEntry(
+          const result = await removeWeeklyPoolEntry(
             {
               weeklyPool: infra.weeklyPool,
               tasks: infra.tasks,
@@ -622,8 +581,12 @@ export class AppStore {
             },
             { workspaceId, entryId: id }
           );
-          const task = this.tasks.find((item) => item.id === removed.taskId);
-          if (task !== undefined) await this.recordTaskEvent(task, 'unscheduled');
+          this.activityLogs = this.activityLogs.filter((log) => log.entryId !== id);
+          if (result.task !== null) {
+            this.tasks = this.upsert(this.tasks, result.task);
+            await this.recordTaskEvent(result.task, 'unscheduled');
+          }
+          this.recomputeDerived();
         },
         () => {
           this.weekEntries = previous;
