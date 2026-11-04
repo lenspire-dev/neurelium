@@ -4,6 +4,7 @@ export interface AuthenticatedUser {
   readonly id: UserId;
   readonly email: string;
   readonly name: string | null;
+  readonly labels: readonly string[];
 }
 
 export interface SignInInput {

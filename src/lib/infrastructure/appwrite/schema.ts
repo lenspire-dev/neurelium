@@ -11,7 +11,13 @@ export const APPWRITE_TABLES = {
   milestones: 'milestones'
 } as const;
 
-export type AppwriteTableId = (typeof APPWRITE_TABLES)[keyof typeof APPWRITE_TABLES];
+export const APPWRITE_SYSTEM_TABLES = {
+  subscriptions: 'subscriptions'
+} as const;
+
+export type AppwriteTableId =
+  | (typeof APPWRITE_TABLES)[keyof typeof APPWRITE_TABLES]
+  | (typeof APPWRITE_SYSTEM_TABLES)[keyof typeof APPWRITE_SYSTEM_TABLES];
 
 export interface AppwriteColumn {
   readonly key: string;
@@ -253,5 +259,18 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
       timestamp('updatedAt')
     ],
     indexes: [keyIndex('idx_workspace', 'workspaceId')]
+  },
+  {
+    id: APPWRITE_SYSTEM_TABLES.subscriptions,
+    name: 'Subscriptions',
+    columns: [
+      id('userId'),
+      { key: 'plan', type: 'varchar', size: 16, required: true },
+      { key: 'status', type: 'varchar', size: 16, required: true },
+      timestamp('currentPeriodEnd'),
+      { key: 'provider', type: 'varchar', size: 32, required: false },
+      { key: 'providerSubscriptionId', type: 'varchar', size: 128, required: false }
+    ],
+    indexes: [keyIndex('idx_user', 'userId')]
   }
 ];

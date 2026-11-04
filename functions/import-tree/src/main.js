@@ -9,7 +9,13 @@ import {
   Teams,
   Users
 } from 'node-appwrite';
-import { monthStartIso, planName, PLAN_LIMITS, resolvePlan } from './plans.js';
+import {
+  monthStartIso,
+  planName,
+  PLAN_LIMITS,
+  resolvePlan,
+  resolveSubscriptionPlan
+} from './plans.js';
 
 const DATABASE_ID = process.env.APPWRITE_DATABASE_ID || 'neurelium';
 const TABLES = {
@@ -20,7 +26,8 @@ const TABLES = {
   weeklyPoolEntries: 'weekly_pool_entries',
   activityLogs: 'activity_logs',
   activityEvents: 'activity_events',
-  milestones: 'milestones'
+  milestones: 'milestones',
+  subscriptions: 'subscriptions'
 };
 const CONTENT_TABLES = new Set([
   TABLES.categories,
@@ -175,10 +182,49 @@ async function countRows(tables, tableId, queries) {
   return result.total;
 }
 
-async function readPlan(users, ownerId) {
+async function readPlan(tables, users, ownerId) {
   const owner = await users.get({ userId: ownerId });
+
+  let subscriptions = [];
+  try {
+    const result = await tables.listRows({
+      databaseId: DATABASE_ID,
+      tableId: TABLES.subscriptions,
+      queries: [Query.equal('userId', ownerId), Query.limit(100)]
+    });
+    subscriptions = result.rows;
+  } catch (failure) {
+    if (failure?.code !== 404) throw failure;
+  }
+
+  if (subscriptions.length > 0) {
+    const { plan, expiresAt } = resolveSubscriptionPlan(subscriptions);
+    return {
+      plan,
+      limits: PLAN_LIMITS[plan],
+      source: 'subscription',
+      expiresAt
+    };
+  }
+
   const plan = resolvePlan(owner.labels ?? []);
-  return { plan, limits: PLAN_LIMITS[plan] };
+  return {
+    plan,
+    limits: PLAN_LIMITS[plan],
+    source: 'label',
+    expiresAt: null
+  };
+}
+
+async function getPlan(context) {
+  const info = await readPlan(context.tables, context.adminUsers, context.userId);
+  return {
+    plan: info.plan,
+    name: planName(info.plan),
+    limits: info.limits,
+    source: info.source,
+    expiresAt: info.expiresAt
+  };
 }
 
 async function loadWorkspace(userTables, workspaceId) {
@@ -201,7 +247,7 @@ async function requireWriterRole(adminTeams, userId, workspace) {
 }
 
 async function assertOwnedWorkspaceLimit(tables, users, ownerId) {
-  const { plan, limits } = await readPlan(users, ownerId);
+  const { plan, limits } = await readPlan(tables, users, ownerId);
   const count = await countRows(tables, TABLES.workspaces, [
     Query.equal('ownerId', ownerId)
   ]);
@@ -215,7 +261,7 @@ async function assertOwnedWorkspaceLimit(tables, users, ownerId) {
 
 async function assertTaskCapacity(tables, users, workspaceId, ownerId, incoming = 0) {
   if (incoming === 0) return;
-  const { plan, limits } = await readPlan(users, ownerId);
+  const { plan, limits } = await readPlan(tables, users, ownerId);
   const count = await countRows(tables, TABLES.tasks, [
     Query.equal('workspaceId', workspaceId)
   ]);
@@ -228,7 +274,7 @@ async function assertTaskCapacity(tables, users, workspaceId, ownerId, incoming 
 }
 
 async function assertMilestoneCapacity(tables, users, workspaceId, ownerId) {
-  const { plan, limits } = await readPlan(users, ownerId);
+  const { plan, limits } = await readPlan(tables, users, ownerId);
   const today = new Date().toISOString().slice(0, 10);
   const count = await countRows(tables, TABLES.milestones, [
     Query.equal('workspaceId', workspaceId),
@@ -243,7 +289,7 @@ async function assertMilestoneCapacity(tables, users, workspaceId, ownerId) {
 }
 
 async function assertImportQuota(tables, users, ownerId) {
-  const { plan, limits } = await readPlan(users, ownerId);
+  const { plan, limits } = await readPlan(tables, users, ownerId);
   const owned = await tables.listRows({
     databaseId: DATABASE_ID,
     tableId: TABLES.workspaces,
@@ -277,7 +323,7 @@ async function importTree(context, body) {
   await requireWriterRole(adminTeams, userId, workspace);
   await assertImportQuota(tables, users, workspace.ownerId);
 
-  const { limits } = await readPlan(users, workspace.ownerId);
+  const { limits } = await readPlan(tables, users, workspace.ownerId);
   const tree = parseCategory(body.tree, 'category');
   const now = new Date().toISOString();
   const rows = { categories: [], topics: [], tasks: [] };
@@ -471,7 +517,7 @@ async function inviteMember(context, body) {
     throw new AppError('You cannot invite members to this workspace.', 403);
   }
 
-  const { plan, limits } = await readPlan(users, workspace.ownerId);
+  const { plan, limits } = await readPlan(tables, users, workspace.ownerId);
   const memberships = await adminTeams.listMemberships({
     teamId: workspaceId,
     queries: [Query.limit(1)]
@@ -550,6 +596,9 @@ export default async ({ req, res, error: logError }) => {
       case 'inviteMember':
         await inviteMember(context, body);
         result = {};
+        break;
+      case 'getPlan':
+        result = await getPlan(context);
         break;
       default:
         throw new AppError('Unknown action.');

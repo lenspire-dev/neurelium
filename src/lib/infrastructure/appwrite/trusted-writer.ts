@@ -1,9 +1,10 @@
 import type { Functions } from 'appwrite';
+import type { PlanInfo } from '../../domain/models/plan';
 import type { Workspace } from '../../domain/models/workspace';
 import type { WorkspaceRole } from '../../domain/models/workspace-member';
 import { workspaceToData, type RowData, type StoredRow } from './mappers';
 
-interface FunctionResult {
+interface FunctionResult extends Partial<PlanInfo> {
   readonly ok?: boolean;
   readonly error?: string;
   readonly row?: StoredRow;
@@ -79,6 +80,25 @@ export class AppwriteTrustedWriter implements RowWriter, MemberInviter {
       categories: result.categories ?? 0,
       topics: result.topics ?? 0,
       tasks: result.tasks ?? 0
+    };
+  }
+
+  async getPlan(): Promise<PlanInfo> {
+    const result = await this.execute({ action: 'getPlan' });
+    if (
+      result.plan === undefined ||
+      result.name === undefined ||
+      result.limits === undefined ||
+      result.source === undefined
+    ) {
+      throw new Error('Server function did not return plan details.');
+    }
+    return {
+      plan: result.plan,
+      name: result.name,
+      limits: result.limits,
+      source: result.source,
+      expiresAt: result.expiresAt ?? null
     };
   }
 

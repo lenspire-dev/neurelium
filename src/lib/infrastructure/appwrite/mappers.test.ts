@@ -231,7 +231,9 @@ describe('Appwrite schema', () => {
     for (const table of APPWRITE_SCHEMA) {
       const keys = table.columns.map((column) => column.key);
       expect(new Set(keys).size).toBe(keys.length);
-      if (table.id !== 'workspaces') expect(keys).toContain('workspaceId');
+      if (table.id !== 'workspaces' && table.id !== 'subscriptions') {
+        expect(keys).toContain('workspaceId');
+      }
     }
   });
 

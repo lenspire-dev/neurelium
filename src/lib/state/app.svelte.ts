@@ -33,6 +33,7 @@ import type {
   Task,
   Topic
 } from '#lib/domain/models/hierarchy.js';
+import type { PlanInfo } from '#lib/domain/models/plan.js';
 import type { WeeklyPoolEntry } from '#lib/domain/models/planning.js';
 import type { Workspace, WorkspaceDefaultView, WorkspaceWeekStart } from '#lib/domain/models/workspace.js';
 import type {
@@ -101,6 +102,8 @@ function storeWorkspaceId(workspaceId: string): void {
 export class AppStore {
   session = $state<SessionState>('loading');
   user = $state<AuthenticatedUser | null>(null);
+  plan = $state<PlanInfo | null>(null);
+  planLoading = $state(false);
   workspaces = $state<readonly Workspace[]>([]);
   workspace = $state<Workspace | null>(null);
   members = $state<readonly WorkspaceMember[]>([]);
@@ -161,6 +164,7 @@ export class AppStore {
     await this.withBusy(async () => {
       await this.requireInfrastructure().auth.signOut();
       this.user = null;
+      this.plan = null;
       this.session = 'signed-out';
       this.workspace = null;
       this.workspaces = [];
@@ -187,10 +191,23 @@ export class AppStore {
     });
   }
 
+  async loadPlan(): Promise<void> {
+    if (this.user === null || this.planLoading) return;
+    this.planLoading = true;
+    try {
+      this.plan = await this.requireInfrastructure().writer.getPlan();
+    } catch {
+      this.plan = null;
+    } finally {
+      this.planLoading = false;
+    }
+  }
+
   async signOutEverywhere(): Promise<void> {
     await this.withBusy(async () => {
       await this.requireInfrastructure().auth.deleteSessions();
       this.user = null;
+      this.plan = null;
       this.session = 'signed-out';
       this.workspace = null;
       this.workspaces = [];

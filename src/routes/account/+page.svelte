@@ -1,11 +1,30 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { app } from '#lib/state/app.svelte.js';
   import { askConfirm } from '#lib/state/confirm.svelte.js';
   import { Button } from '#lib/components/ui/button/index.js';
   import { Input } from '#lib/components/ui/input/index.js';
   import { Label } from '#lib/components/ui/label/index.js';
-  import { KeyRound, LogOut, Mail, UserRound } from '@lucide/svelte';
+  import {
+    planDetails,
+    planName,
+    PLAN_LIMITS,
+    resolvePlan
+  } from '#lib/presentation/plan.js';
+  import { BadgeCheck, KeyRound, LogOut, Mail, UserRound } from '@lucide/svelte';
 
+  let labels = $derived(app.user?.labels ?? []);
+  let plan = $derived(app.plan?.name ?? planName(labels));
+  let details = $derived(
+    planDetails(app.plan?.limits ?? PLAN_LIMITS[resolvePlan(labels)])
+  );
+  let expiresAt = $derived(
+    app.plan?.expiresAt ? new Date(app.plan.expiresAt).toLocaleDateString() : null
+  );
+
+  onMount(() => {
+    void app.loadPlan();
+  });
   let name = $state(app.user?.name ?? '');
   let email = $state(app.user?.email ?? '');
   let emailPassword = $state('');
@@ -108,6 +127,37 @@
       {success}
     </p>
   {/if}
+
+  <section class="rounded-2xl border bg-card p-4 sm:p-5">
+    <div class="flex items-center gap-3">
+      <span class="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary">
+        <BadgeCheck class="size-5" />
+      </span>
+      <div>
+        <h2 class="text-sm font-semibold">Plan</h2>
+        <p class="text-xs text-muted-foreground">
+          {#if expiresAt}
+            Active until {expiresAt}
+          {:else if app.plan?.source === 'subscription'}
+            No active subscription.
+          {:else}
+            Assigned by Neurelium.
+          {/if}
+        </p>
+      </div>
+      <span class="ml-auto rounded-full border bg-muted px-3 py-1 text-sm font-medium">
+        {plan}
+      </span>
+    </div>
+    <dl class="mt-4 grid gap-x-4 gap-y-2 border-t pt-4 text-sm sm:grid-cols-2">
+      {#each details as detail}
+        <div class="flex items-baseline justify-between gap-3">
+          <dt class="text-muted-foreground">{detail.label}</dt>
+          <dd class="font-medium tabular-nums">{detail.value}</dd>
+        </div>
+      {/each}
+    </dl>
+  </section>
 
   <section class="rounded-2xl border bg-card p-4 sm:p-5">
     <div class="flex items-center gap-3">

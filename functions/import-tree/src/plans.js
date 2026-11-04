@@ -34,9 +34,39 @@ export const PLAN_NAMES = {
   team: 'Team'
 };
 
+const PLAN_PRIORITY = { free: 0, pro: 1, team: 2 };
+const ACTIVE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing']);
+
+export function resolveSubscriptionPlan(rows = [], now = new Date()) {
+  let plan = 'free';
+  let expiresAt = null;
+
+  for (const row of rows) {
+    if (!ACTIVE_SUBSCRIPTION_STATUSES.has(row.status)) continue;
+    if (row.plan !== 'pro' && row.plan !== 'team') continue;
+    if (typeof row.currentPeriodEnd !== 'string') continue;
+
+    const end = new Date(row.currentPeriodEnd);
+    if (Number.isNaN(end.getTime()) || end.getTime() <= now.getTime()) continue;
+
+    if (PLAN_PRIORITY[row.plan] > PLAN_PRIORITY[plan]) {
+      plan = row.plan;
+      expiresAt = row.currentPeriodEnd;
+    } else if (
+      row.plan === plan &&
+      expiresAt !== null &&
+      end.getTime() > new Date(expiresAt).getTime()
+    ) {
+      expiresAt = row.currentPeriodEnd;
+    }
+  }
+
+  return { plan, expiresAt };
+}
+
 export function resolvePlan(labels = []) {
-  if (labels.includes('plan_team')) return 'team';
-  if (labels.includes('plan_pro')) return 'pro';
+  if (labels.includes('planteam')) return 'team';
+  if (labels.includes('planpro')) return 'pro';
   return 'free';
 }
 

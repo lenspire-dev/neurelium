@@ -95,11 +95,17 @@ export class AppwriteAuthAdapter implements AuthPort, CurrentUserIdProvider {
     }
   }
 
-  private rememberUser(user: { $id: string; email: string; name: string }): AuthenticatedUser {
+  private rememberUser(user: {
+    $id: string;
+    email: string;
+    name: string;
+    labels: string[];
+  }): AuthenticatedUser {
     this.cachedUser = {
       id: asUserId(user.$id),
       email: user.email,
-      name: user.name.trim().length === 0 ? null : user.name
+      name: user.name.trim().length === 0 ? null : user.name,
+      labels: user.labels
     };
     return this.cachedUser;
   }
