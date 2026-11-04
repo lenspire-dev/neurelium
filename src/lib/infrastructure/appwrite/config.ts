@@ -6,7 +6,7 @@ export interface AppwriteConfig {
   readonly endpoint: string;
   readonly projectId: string;
   readonly databaseId: string;
-  readonly importFunctionId: string | null;
+  readonly importFunctionId: string;
 }
 
 export interface AppwritePublicEnv {

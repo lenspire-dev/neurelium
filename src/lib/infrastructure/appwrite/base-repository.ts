@@ -1,8 +1,8 @@
 import { Permission, Query, Role, type TablesDB } from 'appwrite';
 import type { WorkspaceId } from '../../domain/models/identifiers';
-import type { CurrentUserIdProvider } from './auth-adapter';
 import { isNotFoundError } from './errors';
 import type { RowData, StoredRow } from './mappers';
+import type { RowWriter } from './trusted-writer';
 
 const PAGE_SIZE = 100;
 
@@ -11,7 +11,7 @@ export abstract class AppwriteRepository<TEntity> {
     protected readonly tables: TablesDB,
     protected readonly databaseId: string,
     protected readonly tableId: string,
-    private readonly currentUser: CurrentUserIdProvider
+    private readonly writer: RowWriter
   ) {}
 
   protected abstract rowId(entity: TEntity): string;
@@ -44,15 +44,22 @@ export abstract class AppwriteRepository<TEntity> {
   }
 
   protected async saveEntity(entity: TEntity): Promise<TEntity> {
-    const userId = await this.currentUser.currentUserId();
-    const row = await this.tables.upsertRow<StoredRow>({
-      databaseId: this.databaseId,
-      tableId: this.tableId,
-      rowId: this.rowId(entity),
-      data: this.toData(entity),
-      permissions: workspacePermissions(userId, workspaceOf(entity))
-    });
-    return this.fromRow(row);
+    const rowId = this.rowId(entity);
+    const data = this.toData(entity);
+
+    try {
+      const row = await this.tables.updateRow<StoredRow>({
+        databaseId: this.databaseId,
+        tableId: this.tableId,
+        rowId,
+        data
+      });
+      return this.fromRow(row);
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error;
+    }
+
+    return this.fromRow(await this.writer.createRow(this.tableId, rowId, data));
   }
 
   protected async deleteEntity(
@@ -102,18 +109,6 @@ export abstract class AppwriteRepository<TEntity> {
   private belongsTo(row: StoredRow, workspaceId: string): boolean {
     return row.workspaceId === workspaceId;
   }
-}
-
-export function workspaceOf(entity: unknown): string {
-  if (
-    typeof entity === 'object' &&
-    entity !== null &&
-    'workspaceId' in entity &&
-    typeof entity.workspaceId === 'string'
-  ) {
-    return entity.workspaceId;
-  }
-  return '';
 }
 
 export function ownerPermissions(userId: string): string[] {

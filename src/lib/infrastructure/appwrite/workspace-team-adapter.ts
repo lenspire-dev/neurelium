@@ -7,12 +7,16 @@ import {
 } from '../../domain/models/workspace-member';
 import type { Workspace } from '../../domain/models/workspace';
 import { isNotFoundError } from './errors';
+import type { MemberInviter } from './trusted-writer';
 
 const PAGE_SIZE = 100;
 const CUSTOM_ROLES = ['admin', 'member', 'viewer'] as const;
 
 export class AppwriteWorkspaceTeamAdapter implements WorkspaceTeamPort {
-  constructor(private readonly teams: Teams) {}
+  constructor(
+    private readonly teams: Teams,
+    private readonly writer: MemberInviter
+  ) {}
 
   async ensureTeam(workspace: Workspace): Promise<boolean> {
     try {
@@ -58,11 +62,11 @@ export class AppwriteWorkspaceTeamAdapter implements WorkspaceTeamPort {
     role: Exclude<WorkspaceRole, 'owner'>,
     redirectUrl: string
   ): Promise<void> {
-    await this.teams.createMembership({
-      teamId: workspace.id,
-      roles: [role],
-      email: email.trim(),
-      url: redirectUrl
+    await this.writer.inviteMember({
+      workspaceId: workspace.id,
+      email,
+      role,
+      redirectUrl
     });
   }
 

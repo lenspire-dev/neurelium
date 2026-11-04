@@ -4,6 +4,7 @@ import { readAppwriteConfig, type AppwriteConfig, type AppwritePublicEnv } from 
 import { createAppwriteRepositories } from './repositories';
 import { AppwriteIdGenerator, SystemClock } from './runtime';
 import { APPWRITE_TABLES } from './schema';
+import { AppwriteTrustedWriter } from './trusted-writer';
 import { AppwriteWorkspaceTeamAdapter } from './workspace-team-adapter';
 
 export { AppwriteAuthAdapter } from './auth-adapter';
@@ -21,6 +22,7 @@ export {
   AppwriteWorkspaceRepository
 } from './repositories';
 export { AppwriteIdGenerator, SystemClock } from './runtime';
+export { AppwriteTrustedWriter } from './trusted-writer';
 export {
   APPWRITE_SCHEMA,
   APPWRITE_TABLES,
@@ -42,6 +44,7 @@ function buildInfrastructure(config: AppwriteConfig) {
   const teams = new Teams(client);
   const functions = new Functions(client);
   const auth = new AppwriteAuthAdapter(account);
+  const writer = new AppwriteTrustedWriter(functions, config.importFunctionId);
   const channels = Object.values(APPWRITE_TABLES).map((tableId) =>
     Channel.tablesdb(config.databaseId).table(tableId).row().toString()
   );
@@ -50,12 +53,11 @@ function buildInfrastructure(config: AppwriteConfig) {
     client,
     tables,
     teams,
-    functions,
-    importFunctionId: config.importFunctionId,
+    writer,
     subscribeToWorkspaceRows: (callback: () => void) => client.subscribe(channels, callback),
     auth,
-    team: new AppwriteWorkspaceTeamAdapter(teams),
-    ...createAppwriteRepositories(tables, config.databaseId, auth),
+    team: new AppwriteWorkspaceTeamAdapter(teams, writer),
+    ...createAppwriteRepositories(tables, config.databaseId, auth, writer),
     clock: new SystemClock(),
     ids: new AppwriteIdGenerator()
   };

@@ -1,8 +1,7 @@
 import {
   Client,
-  Permission,
-  Role,
   TablesDB,
+  TablesDBIndexType,
   AppwriteException
 } from 'node-appwrite';
 import {
@@ -61,6 +60,8 @@ async function ensureTable(
   try {
     const existing = await tables.getTable({ databaseId, tableId: definition.id });
     await ensureColumns(definition, existing.columns);
+    await ensureIndexes(definition, existing.indexes);
+    await ensurePermissions(definition);
     console.log(`Table "${definition.id}" already exists.`);
     return;
   } catch (error) {
@@ -71,7 +72,7 @@ async function ensureTable(
     databaseId,
     tableId: definition.id,
     name: definition.name,
-    permissions: [Permission.create(Role.users())],
+    permissions: [],
     rowSecurity: true,
     columns: definition.columns.map((column) => ({ ...column })),
     indexes: definition.indexes.map((index) => ({
@@ -126,6 +127,41 @@ async function ensureColumns(
   }
 
   if (added > 0) await waitForTable(definition.id);
+}
+
+async function ensureIndexes(
+  definition: (typeof APPWRITE_SCHEMA)[number],
+  existing: { key: string }[]
+): Promise<void> {
+  const keys = new Set(existing.map((index) => index.key));
+  let added = 0;
+
+  for (const index of definition.indexes) {
+    if (keys.has(index.key)) continue;
+
+    await tables.createIndex({
+      databaseId,
+      tableId: definition.id,
+      key: index.key,
+      type: index.type === 'unique' ? TablesDBIndexType.Unique : TablesDBIndexType.Key,
+      columns: [...index.attributes]
+    });
+    added += 1;
+    console.log(`Added index "${definition.id}.${index.key}".`);
+  }
+
+  if (added > 0) await waitForTable(definition.id);
+}
+
+async function ensurePermissions(
+  definition: (typeof APPWRITE_SCHEMA)[number]
+): Promise<void> {
+  await tables.updateTable({
+    databaseId,
+    tableId: definition.id,
+    permissions: [],
+    rowSecurity: true
+  });
 }
 
 async function waitForTable(tableId: string): Promise<void> {

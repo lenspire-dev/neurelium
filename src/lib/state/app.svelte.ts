@@ -77,14 +77,6 @@ import {
 type Infrastructure = ReturnType<typeof createAppwriteInfrastructureFromEnv>;
 type SessionState = 'loading' | 'signed-out' | 'signed-in';
 
-interface ImportFunctionResult {
-  readonly ok?: boolean;
-  readonly error?: string;
-  readonly categories?: number;
-  readonly topics?: number;
-  readonly tasks?: number;
-}
-
 const EMPTY_RECOMMENDATION: RecommendationResult = { primary: null, alternatives: [] };
 const ACTIVE_WORKSPACE_KEY = 'neurelium-active-workspace';
 
@@ -230,8 +222,7 @@ export class AppStore {
         createdAt: now,
         updatedAt: now
       };
-      await infra.team.ensureTeam(workspace);
-      const saved = await infra.workspaces.save(workspace);
+      const saved = await infra.workspaces.create(workspace);
       this.workspaces = await infra.workspaces.listAccessible();
       this.workspace = saved;
       storeWorkspaceId(saved.id);
@@ -920,93 +911,13 @@ export class AppStore {
   }
 
   async importCategoryTree(input: ImportCategory): Promise<void> {
-    const infrastructure = this.requireInfrastructure();
     const workspaceId = this.workspace?.id;
-    if (workspaceId !== undefined && infrastructure.importFunctionId !== null) {
-      await this.withBusy(async () => {
-        const execution = await infrastructure.functions.createExecution({
-          functionId: infrastructure.importFunctionId!,
-          body: JSON.stringify({ workspaceId, tree: input }),
-          headers: { 'content-type': 'application/json' }
-        });
-        let result: ImportFunctionResult;
-        try {
-          result = JSON.parse(execution.responseBody) as ImportFunctionResult;
-        } catch {
-          throw new Error('Import function returned an invalid response.');
-        }
-        if (execution.responseStatusCode >= 400 || result.ok !== true) {
-          throw new Error(result.error ?? 'Import failed.');
-        }
-        await this.reload(++this.loadToken);
-      });
-      return;
-    }
+    if (workspaceId === undefined) return;
 
-    const createdCategories: Category[] = [];
-    const createdTopics: Topic[] = [];
-    const createdTasks: Task[] = [];
-
-    await this.persist(async (infra, workspaceId) => {
-      const dependencies = {
-        categories: infra.categories,
-        topics: infra.topics,
-        tasks: infra.tasks,
-        clock: infra.clock,
-        ids: infra.ids
-      };
-
-      async function createNode(
-        node: ImportCategory,
-        parentId: Category['parentId']
-      ): Promise<void> {
-        const category = await createCategory(dependencies, {
-          workspaceId,
-          parentId,
-          name: node.name,
-          icon: node.icon,
-          color: node.color,
-          importanceWeight: node.weight
-        });
-        createdCategories.push(category);
-        for (const item of node.topics) {
-          const topic = await createTopic(dependencies, {
-            workspaceId,
-            categoryId: category.id,
-            name: item.name
-          });
-          createdTopics.push(topic);
-          for (const task of item.tasks) {
-            createdTasks.push(
-              await createTask(dependencies, {
-                workspaceId,
-                topicId: topic.id,
-                title: task.title,
-                icon: task.icon,
-                taskWeight: task.weight
-              })
-            );
-          }
-        }
-        for (const child of node.subcategories) await createNode(child, category.id);
-      }
-
-      await createNode(input, null);
+    await this.withBusy(async () => {
+      await this.requireInfrastructure().writer.importTree(workspaceId, input);
+      await this.reload(++this.loadToken);
     });
-
-    if (this.error === null) {
-      this.categories = [...this.categories, ...createdCategories];
-      this.topics = [...this.topics, ...createdTopics];
-      this.tasks = [...this.tasks, ...createdTasks];
-      this.recomputeDerived();
-      await this.recordEvent({
-        action: 'imported',
-        entityType: 'import',
-        entityId: input.name,
-        entityName: input.name,
-        detail: `${createdCategories.length} categories · ${createdTopics.length} topics · ${createdTasks.length} tasks`
-      });
-    }
   }
 
   async addTopic(categoryId: Category['id'], name: string): Promise<void> {

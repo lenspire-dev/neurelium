@@ -6,16 +6,33 @@ import {
   Query,
   Role,
   TablesDB,
-  Teams
+  Teams,
+  Users
 } from 'node-appwrite';
+import { monthStartIso, planName, PLAN_LIMITS, resolvePlan } from './plans.js';
 
 const DATABASE_ID = process.env.APPWRITE_DATABASE_ID || 'neurelium';
 const TABLES = {
+  workspaces: 'workspaces',
   categories: 'categories',
   topics: 'topics',
   tasks: 'tasks',
-  activityEvents: 'activity_events'
+  weeklyPoolEntries: 'weekly_pool_entries',
+  activityLogs: 'activity_logs',
+  activityEvents: 'activity_events',
+  milestones: 'milestones'
 };
+const CONTENT_TABLES = new Set([
+  TABLES.categories,
+  TABLES.topics,
+  TABLES.tasks,
+  TABLES.weeklyPoolEntries,
+  TABLES.activityLogs,
+  TABLES.activityEvents,
+  TABLES.milestones
+]);
+const REQUIRED_ROLES = new Set(['owner', 'admin', 'member']);
+const INVITE_ROLES = new Set(['admin', 'member', 'viewer']);
 const COLORS = new Set([
   'amber',
   'lime',
@@ -28,28 +45,34 @@ const COLORS = new Set([
 ]);
 const DEFAULT_WEIGHT = 2;
 const BATCH_SIZE = 100;
-const MAX_ROWS = 2000;
+
+class AppError extends Error {
+  constructor(message, status = 400) {
+    super(message);
+    this.status = status;
+  }
+}
 
 function text(value, path) {
   if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`${path} must be a non-empty string.`);
+    throw new AppError(`${path} must be a non-empty string.`);
   }
   return value.trim();
 }
 
 function optionalText(value, path) {
   if (value === undefined || value === null) return null;
-  if (typeof value !== 'string') throw new Error(`${path} must be a string.`);
+  if (typeof value !== 'string') throw new AppError(`${path} must be a string.`);
   const trimmed = value.trim();
   if (trimmed === '') return null;
-  if ([...trimmed].length > 16) throw new Error(`${path} must be a short emoji.`);
+  if ([...trimmed].length > 16) throw new AppError(`${path} must be a short emoji.`);
   return trimmed;
 }
 
 function weight(value, path) {
   if (value === undefined) return DEFAULT_WEIGHT;
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 5) {
-    throw new Error(`${path} must be an integer from 1 to 5.`);
+    throw new AppError(`${path} must be an integer from 1 to 5.`);
   }
   return value;
 }
@@ -57,20 +80,20 @@ function weight(value, path) {
 function color(value, path) {
   if (value === undefined || value === null || value === '') return null;
   if (!COLORS.has(value)) {
-    throw new Error(`${path} must be a supported category color.`);
+    throw new AppError(`${path} must be a supported category color.`);
   }
   return value;
 }
 
 function list(value, path) {
   if (value === undefined) return [];
-  if (!Array.isArray(value)) throw new Error(`${path} must be an array.`);
+  if (!Array.isArray(value)) throw new AppError(`${path} must be an array.`);
   return value;
 }
 
 function object(value, path) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`${path} must be an object.`);
+    throw new AppError(`${path} must be an object.`);
   }
   return value;
 }
@@ -110,7 +133,7 @@ function parseCategory(value, path) {
   };
 }
 
-function permissions(userId, workspaceId) {
+function contentPermissions(userId, workspaceId) {
   return [
     Permission.read(Role.user(userId)),
     Permission.update(Role.user(userId)),
@@ -123,8 +146,349 @@ function permissions(userId, workspaceId) {
   ];
 }
 
-function json(body, status = 200) {
+function workspacePermissions(userId, workspaceId) {
+  return [
+    Permission.read(Role.user(userId)),
+    Permission.update(Role.user(userId)),
+    Permission.delete(Role.user(userId)),
+    Permission.read(Role.team(workspaceId)),
+    Permission.update(Role.team(workspaceId, 'owner')),
+    Permission.update(Role.team(workspaceId, 'admin')),
+    Permission.delete(Role.team(workspaceId, 'owner'))
+  ];
+}
+
+function json(body) {
   return JSON.stringify(body);
+}
+
+function plural(count, noun) {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+async function countRows(tables, tableId, queries) {
+  const result = await tables.listRows({
+    databaseId: DATABASE_ID,
+    tableId,
+    queries: [...queries, Query.limit(1)]
+  });
+  return result.total;
+}
+
+async function readPlan(users, ownerId) {
+  const owner = await users.get({ userId: ownerId });
+  const plan = resolvePlan(owner.labels ?? []);
+  return { plan, limits: PLAN_LIMITS[plan] };
+}
+
+async function loadWorkspace(userTables, workspaceId) {
+  try {
+    return await userTables.getRow({
+      databaseId: DATABASE_ID,
+      tableId: TABLES.workspaces,
+      rowId: workspaceId
+    });
+  } catch {
+    throw new AppError('Workspace not found.', 404);
+  }
+}
+
+async function requireWriterRole(adminTeams, userId, workspace) {
+  const role = await workspaceRole(adminTeams, userId, workspace.$id, workspace.ownerId);
+  if (role === null || !REQUIRED_ROLES.has(role)) {
+    throw new AppError('You cannot create content in this workspace.', 403);
+  }
+}
+
+async function assertOwnedWorkspaceLimit(tables, users, ownerId) {
+  const { plan, limits } = await readPlan(users, ownerId);
+  const count = await countRows(tables, TABLES.workspaces, [
+    Query.equal('ownerId', ownerId)
+  ]);
+  if (count >= limits.ownedWorkspaces) {
+    throw new AppError(
+      `${planName(plan)} plan allows ${plural(limits.ownedWorkspaces, 'workspace')}.`,
+      403
+    );
+  }
+}
+
+async function assertTaskCapacity(tables, users, workspaceId, ownerId, incoming = 0) {
+  if (incoming === 0) return;
+  const { plan, limits } = await readPlan(users, ownerId);
+  const count = await countRows(tables, TABLES.tasks, [
+    Query.equal('workspaceId', workspaceId)
+  ]);
+  if (count + incoming > limits.tasksPerWorkspace) {
+    throw new AppError(
+      `${planName(plan)} plan allows ${limits.tasksPerWorkspace} tasks per workspace.`,
+      403
+    );
+  }
+}
+
+async function assertMilestoneCapacity(tables, users, workspaceId, ownerId) {
+  const { plan, limits } = await readPlan(users, ownerId);
+  const today = new Date().toISOString().slice(0, 10);
+  const count = await countRows(tables, TABLES.milestones, [
+    Query.equal('workspaceId', workspaceId),
+    Query.greaterThanEqual('dueDate', today)
+  ]);
+  if (count >= limits.activeMilestonesPerWorkspace) {
+    throw new AppError(
+      `${planName(plan)} plan allows ${limits.activeMilestonesPerWorkspace} active milestones per workspace.`,
+      403
+    );
+  }
+}
+
+async function assertImportQuota(tables, users, ownerId) {
+  const { plan, limits } = await readPlan(users, ownerId);
+  const owned = await tables.listRows({
+    databaseId: DATABASE_ID,
+    tableId: TABLES.workspaces,
+    queries: [Query.equal('ownerId', ownerId), Query.limit(100)]
+  });
+  const workspaceIds = owned.rows.map((row) => row.$id);
+  if (workspaceIds.length === 0) return;
+
+  const queries = [
+    Query.equal('workspaceId', workspaceIds),
+    Query.equal('action', 'imported')
+  ];
+  if (limits.treeImportWindow === 'month') {
+    queries.push(Query.greaterThanEqual('createdAt', monthStartIso()));
+  }
+
+  const count = await countRows(tables, TABLES.activityEvents, queries);
+  if (count >= limits.treeImports) {
+    const window = limits.treeImportWindow === 'month' ? 'this month' : 'in total';
+    throw new AppError(
+      `${planName(plan)} plan allows ${plural(limits.treeImports, 'tree import')} ${window}.`,
+      403
+    );
+  }
+}
+
+async function importTree(context, body) {
+  const { actor, userId, tables, userTables, adminTeams, users } = context;
+  const workspaceId = text(body.workspaceId, 'workspaceId');
+  const workspace = await loadWorkspace(userTables, workspaceId);
+  await requireWriterRole(adminTeams, userId, workspace);
+  await assertImportQuota(tables, users, workspace.ownerId);
+
+  const { limits } = await readPlan(users, workspace.ownerId);
+  const tree = parseCategory(body.tree, 'category');
+  const now = new Date().toISOString();
+  const rows = { categories: [], topics: [], tasks: [] };
+  const rowPermissions = contentPermissions(userId, workspaceId);
+
+  function createNode(node, parentId) {
+    if (rows.categories.length + rows.topics.length + rows.tasks.length >= limits.maxRowsPerImport) {
+      throw new AppError(`Import is limited to ${limits.maxRowsPerImport} rows.`);
+    }
+    const categoryId = ID.unique();
+    rows.categories.push({
+      $id: categoryId,
+      $permissions: rowPermissions,
+      workspaceId,
+      parentId,
+      name: node.name,
+      icon: node.icon,
+      color: node.color,
+      importanceWeight: node.weight,
+      statusOverride: null,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    for (const item of node.topics) {
+      const topicId = ID.unique();
+      rows.topics.push({
+        $id: topicId,
+        $permissions: rowPermissions,
+        workspaceId,
+        categoryId,
+        name: item.name,
+        createdAt: now,
+        updatedAt: now
+      });
+      for (const task of item.tasks) {
+        rows.tasks.push({
+          $id: ID.unique(),
+          $permissions: rowPermissions,
+          workspaceId,
+          topicId,
+          title: task.title,
+          icon: task.icon,
+          taskWeight: task.weight,
+          status: 'todo',
+          statusChangedAt: null,
+          doneDate: null,
+          createdAt: now,
+          updatedAt: now
+        });
+      }
+    }
+    for (const child of node.subcategories) createNode(child, categoryId);
+  }
+
+  createNode(tree, null);
+  await assertTaskCapacity(tables, users, workspaceId, workspace.ownerId, rows.tasks.length);
+
+  const detail = `${rows.categories.length} categories · ${rows.topics.length} topics · ${rows.tasks.length} tasks`;
+  rows.activityEvents = [
+    {
+      $id: ID.unique(),
+      $permissions: rowPermissions,
+      workspaceId,
+      actorId: userId,
+      actorName: actor.name || actor.email || 'Unknown member',
+      action: 'imported',
+      entityType: 'import',
+      entityId: tree.name,
+      entityName: tree.name,
+      contextName: null,
+      detail,
+      createdAt: now
+    }
+  ];
+
+  const transaction = await tables.createTransaction({ ttl: 300 });
+  try {
+    for (const tableId of Object.keys(rows)) {
+      for (let index = 0; index < rows[tableId].length; index += BATCH_SIZE) {
+        await tables.createRows({
+          databaseId: DATABASE_ID,
+          tableId: TABLES[tableId],
+          rows: rows[tableId].slice(index, index + BATCH_SIZE),
+          transactionId: transaction.$id
+        });
+      }
+    }
+    await tables.updateTransaction({ transactionId: transaction.$id, commit: true });
+  } catch (failure) {
+    await tables
+      .updateTransaction({ transactionId: transaction.$id, rollback: true })
+      .catch(() => {});
+    throw failure;
+  }
+
+  return {
+    categories: rows.categories.length,
+    topics: rows.topics.length,
+    tasks: rows.tasks.length
+  };
+}
+
+async function createRow(context, body) {
+  const { userId, tables, userTables, adminTeams, users } = context;
+  const tableId = text(body.tableId, 'tableId');
+  if (!CONTENT_TABLES.has(tableId)) {
+    throw new AppError('This row cannot be created through this function.');
+  }
+  const rowId = text(body.rowId, 'rowId');
+  const input = object(body.data, 'data');
+  const workspaceId = text(input.workspaceId, 'data.workspaceId');
+  const workspace = await loadWorkspace(userTables, workspaceId);
+  await requireWriterRole(adminTeams, userId, workspace);
+
+  if (tableId === TABLES.tasks) {
+    await assertTaskCapacity(tables, users, workspaceId, workspace.ownerId, 1);
+  } else if (tableId === TABLES.milestones) {
+    await assertMilestoneCapacity(tables, users, workspaceId, workspace.ownerId);
+  }
+
+  const data = { ...input, workspaceId };
+  delete data.$id;
+  delete data.$permissions;
+  const row = await tables.createRow({
+    databaseId: DATABASE_ID,
+    tableId,
+    rowId,
+    data,
+    permissions: contentPermissions(userId, workspaceId)
+  });
+  return { row };
+}
+
+async function createWorkspace(context, body) {
+  const { userId, tables, adminUsers, userTeams } = context;
+  const workspaceId = text(body.workspaceId, 'workspaceId');
+  const input = object(body.data, 'data');
+  const name = text(input.name, 'data.name');
+
+  await assertOwnedWorkspaceLimit(tables, adminUsers, userId);
+
+  const now = new Date().toISOString();
+  const data = {
+    name,
+    ownerId: userId,
+    defaultView: input.defaultView === 'week' ? 'week' : 'day',
+    weekStartsOn: input.weekStartsOn === 'sunday' ? 'sunday' : 'monday',
+    categoryOverrideMode: input.categoryOverrideMode === 'done_only' ? 'done_only' : 'any',
+    createdAt: now,
+    updatedAt: now
+  };
+
+  await userTeams.create({
+    teamId: workspaceId,
+    name,
+    roles: ['admin', 'member', 'viewer']
+  });
+
+  try {
+    const row = await tables.createRow({
+      databaseId: DATABASE_ID,
+      tableId: TABLES.workspaces,
+      rowId: workspaceId,
+      data,
+      permissions: workspacePermissions(userId, workspaceId)
+    });
+    return { row };
+  } catch (failure) {
+    await userTeams.delete({ teamId: workspaceId }).catch(() => {});
+    throw failure;
+  }
+}
+
+async function inviteMember(context, body) {
+  const { tables, adminTeams, users, userTeams } = context;
+  const workspaceId = text(body.workspaceId, 'workspaceId');
+  const email = text(body.email, 'email');
+  const role = text(body.role, 'role');
+  if (!INVITE_ROLES.has(role)) throw new AppError('Invalid member role.');
+  const redirectUrl = text(body.redirectUrl, 'redirectUrl');
+
+  const workspace = await loadWorkspace(context.userTables, workspaceId);
+  const actorRole = await workspaceRole(
+    adminTeams,
+    context.userId,
+    workspaceId,
+    workspace.ownerId
+  );
+  if (actorRole !== 'owner' && actorRole !== 'admin') {
+    throw new AppError('You cannot invite members to this workspace.', 403);
+  }
+
+  const { plan, limits } = await readPlan(users, workspace.ownerId);
+  const memberships = await adminTeams.listMemberships({
+    teamId: workspaceId,
+    queries: [Query.limit(1)]
+  });
+  if (memberships.total >= limits.membersPerWorkspace) {
+    throw new AppError(
+      `${planName(plan)} plan allows ${plural(limits.membersPerWorkspace, 'member')} per workspace.`,
+      403
+    );
+  }
+
+  await userTeams.createMembership({
+    teamId: workspaceId,
+    roles: [role],
+    email: email.trim(),
+    url: redirectUrl
+  });
 }
 
 export default async ({ req, res, error: logError }) => {
@@ -142,9 +506,11 @@ export default async ({ req, res, error: logError }) => {
 
   const admin = new Client().setEndpoint(endpoint).setProject(projectId).setKey(key);
   const user = new Client().setEndpoint(endpoint).setProject(projectId).setJWT(jwt);
-  const tables = new TablesDB(admin);
+  const adminTables = new TablesDB(admin);
   const userTables = new TablesDB(user);
   const adminTeams = new Teams(admin);
+  const userTeams = new Teams(user);
+  const adminUsers = new Users(admin);
 
   try {
     let actor;
@@ -153,137 +519,48 @@ export default async ({ req, res, error: logError }) => {
     } catch {
       return res.text(json({ error: 'Authentication required.' }), 401);
     }
-    const userId = actor.$id;
 
     const body = req.bodyJson;
     if (typeof body !== 'object' || body === null) {
       return res.text(json({ error: 'Request body must be JSON.' }), 400);
     }
-    const workspaceId = text(body.workspaceId, 'workspaceId');
 
-    let workspace;
-    try {
-      workspace = await userTables.getRow({
-        databaseId: DATABASE_ID,
-        tableId: 'workspaces',
-        rowId: workspaceId
-      });
-    } catch {
-      return res.text(json({ error: 'Workspace not found.' }), 404);
+    const context = {
+      actor,
+      userId: actor.$id,
+      adminUsers,
+      userTeams,
+      adminTeams,
+      tables: adminTables,
+      userTables
+    };
+    const action = typeof body.action === 'string' ? body.action : 'import';
+
+    let result;
+    switch (action) {
+      case 'import':
+        result = await importTree(context, body);
+        break;
+      case 'createRow':
+        result = await createRow(context, body);
+        break;
+      case 'createWorkspace':
+        result = await createWorkspace(context, body);
+        break;
+      case 'inviteMember':
+        await inviteMember(context, body);
+        result = {};
+        break;
+      default:
+        throw new AppError('Unknown action.');
     }
 
-    const role = await workspaceRole(adminTeams, userId, workspaceId, workspace.ownerId);
-    if (role === null || role === 'viewer') {
-      return res.text(json({ error: 'You cannot import into this workspace.' }), 403);
-    }
-
-    const tree = parseCategory(body.tree, 'category');
-    const now = new Date().toISOString();
-    const rows = { categories: [], topics: [], tasks: [] };
-    const rowPermissions = permissions(userId, workspaceId);
-
-    function createNode(node, parentId) {
-      if (rows.categories.length + rows.topics.length + rows.tasks.length >= MAX_ROWS) {
-        throw new Error(`Import is limited to ${MAX_ROWS} rows.`);
-      }
-      const categoryId = ID.unique();
-      rows.categories.push({
-        $id: categoryId,
-        $permissions: rowPermissions,
-        workspaceId,
-        parentId,
-        name: node.name,
-        icon: node.icon,
-        color: node.color,
-        importanceWeight: node.weight,
-        statusOverride: null,
-        createdAt: now,
-        updatedAt: now
-      });
-
-      for (const item of node.topics) {
-        const topicId = ID.unique();
-        rows.topics.push({
-          $id: topicId,
-          $permissions: rowPermissions,
-          workspaceId,
-          categoryId,
-          name: item.name,
-          createdAt: now,
-          updatedAt: now
-        });
-        for (const task of item.tasks) {
-          rows.tasks.push({
-            $id: ID.unique(),
-            $permissions: rowPermissions,
-            workspaceId,
-            topicId,
-            title: task.title,
-            icon: task.icon,
-            taskWeight: task.weight,
-            status: 'todo',
-            statusChangedAt: null,
-            doneDate: null,
-            createdAt: now,
-            updatedAt: now
-          });
-        }
-      }
-      for (const child of node.subcategories) createNode(child, categoryId);
-    }
-
-    createNode(tree, null);
-
-    const detail = `${rows.categories.length} categories · ${rows.topics.length} topics · ${rows.tasks.length} tasks`;
-    rows.activityEvents = [
-      {
-        $id: ID.unique(),
-        $permissions: rowPermissions,
-        workspaceId,
-        actorId: userId,
-        actorName: actor.name || actor.email || 'Unknown member',
-        action: 'imported',
-        entityType: 'import',
-        entityId: tree.name,
-        entityName: tree.name,
-        contextName: null,
-        detail,
-        createdAt: now
-      }
-    ];
-
-    const transaction = await tables.createTransaction({ ttl: 300 });
-    try {
-      for (const tableId of Object.keys(rows)) {
-        for (let index = 0; index < rows[tableId].length; index += BATCH_SIZE) {
-          await tables.createRows({
-            databaseId: DATABASE_ID,
-            tableId: TABLES[tableId],
-            rows: rows[tableId].slice(index, index + BATCH_SIZE),
-            transactionId: transaction.$id
-          });
-        }
-      }
-      await tables.updateTransaction({ transactionId: transaction.$id, commit: true });
-    } catch (failure) {
-      await tables
-        .updateTransaction({ transactionId: transaction.$id, rollback: true })
-        .catch(() => {});
-      throw failure;
-    }
-
-    return res.text(
-      json({
-        ok: true,
-        categories: rows.categories.length,
-        topics: rows.topics.length,
-        tasks: rows.tasks.length
-      })
-    );
+    return res.text(json({ ok: true, ...result }));
   } catch (failure) {
     logError(failure);
-    const message = failure instanceof Error ? failure.message : 'Import failed.';
-    return res.text(json({ error: message }), 400);
+    const status = failure instanceof AppError ? failure.status : 400;
+    const message = failure instanceof Error ? failure.message : 'Request failed.';
+    return res.text(json({ error: message }), status);
   }
 };
 

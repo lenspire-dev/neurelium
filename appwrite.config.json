@@ -4,7 +4,7 @@
     "functions": [
         {
             "$id": "import-tree",
-            "name": "Import category tree",
+            "name": "Workspace writes",
             "runtime": "node-22",
             "path": "functions/import-tree",
             "entrypoint": "src/main.js",
@@ -21,7 +21,8 @@
             "scopes": [
                 "rows.read",
                 "rows.write",
-                "teams.read"
+                "teams.read",
+                "users.read"
             ],
             "ignore": [
                 "node_modules",

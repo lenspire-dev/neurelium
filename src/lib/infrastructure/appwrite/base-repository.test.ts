@@ -1,22 +1,17 @@
 import { describe, expect, test } from 'bun:test';
-import { AppwriteException, Permission, Role, type TablesDB } from 'appwrite';
+import { AppwriteException, type TablesDB } from 'appwrite';
 import type { Category } from '../../domain/models/hierarchy';
-import {
-  asCategoryId,
-  asUserId,
-  asWorkspaceId
-} from '../../domain/models/identifiers';
+import { asCategoryId, asWorkspaceId } from '../../domain/models/identifiers';
 import { AppwriteRepository } from './base-repository';
-import type { CurrentUserIdProvider } from './auth-adapter';
 import {
   categoryToData,
   rowToCategory,
   type StoredRow
 } from './mappers';
+import type { RowWriter } from './trusted-writer';
 
 const workspace = asWorkspaceId('workspace-a');
 const otherWorkspace = asWorkspaceId('workspace-b');
-const user = asUserId('user-a');
 
 function categoryRow(id: string, workspaceId: string): StoredRow {
   return {
@@ -58,7 +53,6 @@ class FakeTables {
   readonly rows = new Map<string, StoredRow>();
   readonly pages: StoredRow[][] = [];
   readonly deleted: string[] = [];
-  savedPermissions: string[] = [];
   savedData: Record<string, unknown> = {};
 
   async getRow({ rowId }: { rowId: string }): Promise<StoredRow> {
@@ -72,18 +66,17 @@ class FakeTables {
     return { total: rows.length, rows };
   }
 
-  async upsertRow({
+  async updateRow({
     rowId,
-    data,
-    permissions
+    data
   }: {
     rowId: string;
     data: Record<string, unknown>;
-    permissions: string[];
   }): Promise<StoredRow> {
+    const existing = this.rows.get(rowId);
+    if (existing === undefined) throw new AppwriteException('Not found', 404);
     this.savedData = data;
-    this.savedPermissions = permissions;
-    const row = { ...categoryRow(rowId, String(data.workspaceId)), ...data } as StoredRow;
+    const row = { ...existing, ...data } as StoredRow;
     this.rows.set(rowId, row);
     return row;
   }
@@ -91,6 +84,20 @@ class FakeTables {
   async deleteRow({ rowId }: { rowId: string }): Promise<void> {
     this.deleted.push(rowId);
     this.rows.delete(rowId);
+  }
+}
+
+class FakeWriter implements RowWriter {
+  readonly created: StoredRow[] = [];
+
+  async createRow(
+    _tableId: string,
+    rowId: string,
+    data: Record<string, unknown>
+  ): Promise<StoredRow> {
+    const row = { ...categoryRow(rowId, String(data.workspaceId)), ...data } as StoredRow;
+    this.created.push(row);
+    return row;
   }
 }
 
@@ -126,18 +133,14 @@ class TestCategoryRepository extends AppwriteRepository<Category> {
 
 function setup() {
   const tables = new FakeTables();
-  const currentUser: CurrentUserIdProvider = {
-    async currentUserId() {
-      return user;
-    }
-  };
+  const writer = new FakeWriter();
   const repository = new TestCategoryRepository(
     tables as unknown as TablesDB,
     'test',
     'categories',
-    currentUser
+    writer
   );
-  return { tables, repository };
+  return { tables, writer, repository };
 }
 
 describe('AppwriteRepository', () => {
@@ -172,24 +175,25 @@ describe('AppwriteRepository', () => {
     expect(tables.pages).toHaveLength(0);
   });
 
-  test('saves with owner and team row permissions', async () => {
-    const { tables, repository } = setup();
+  test('updates existing rows directly', async () => {
+    const { tables, writer, repository } = setup();
+    tables.rows.set('category-a', categoryRow('category-a', workspace));
 
     const saved = await repository.save(category('category-a'));
 
     expect(saved.id).toBe(asCategoryId('category-a'));
     expect(tables.savedData.workspaceId).toBe(workspace);
-    expect(tables.savedPermissions).toEqual([
-      Permission.read(Role.user(user)),
-      Permission.update(Role.user(user)),
-      Permission.delete(Role.user(user)),
-      Permission.read(Role.team(workspace)),
-      Permission.update(Role.team(workspace, 'owner')),
-      Permission.update(Role.team(workspace, 'admin')),
-      Permission.update(Role.team(workspace, 'member')),
-      Permission.delete(Role.team(workspace, 'owner')),
-      Permission.delete(Role.team(workspace, 'admin'))
-    ]);
+    expect(writer.created).toHaveLength(0);
+  });
+
+  test('creates missing rows through the trusted writer', async () => {
+    const { writer, repository } = setup();
+
+    const saved = await repository.save(category('category-a'));
+
+    expect(saved.id).toBe(asCategoryId('category-a'));
+    expect(writer.created).toHaveLength(1);
+    expect(writer.created[0]?.$id).toBe('category-a');
   });
 
   test('deletes only rows owned by the requested workspace', async () => {

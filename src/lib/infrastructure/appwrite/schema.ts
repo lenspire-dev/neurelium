@@ -235,6 +235,7 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
     ],
     indexes: [
       keyIndex('idx_workspace_created', 'workspaceId', 'createdAt'),
+      keyIndex('idx_workspace_action_created', 'workspaceId', 'action', 'createdAt'),
       keyIndex('idx_entity', 'entityType', 'entityId')
     ]
   },

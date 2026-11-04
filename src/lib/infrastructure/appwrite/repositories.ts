@@ -30,6 +30,7 @@ import {
 } from './base-repository';
 import type { CurrentUserIdProvider } from './auth-adapter';
 import { isNotFoundError } from './errors';
+import type { RowWriter, WorkspaceWriter } from './trusted-writer';
 import {
   activityEventToData,
   activityLogToData,
@@ -57,12 +58,8 @@ export class AppwriteCategoryRepository
   extends AppwriteRepository<Category>
   implements CategoryRepository
 {
-  constructor(
-    tables: TablesDB,
-    databaseId: string,
-    currentUser: CurrentUserIdProvider
-  ) {
-    super(tables, databaseId, APPWRITE_TABLES.categories, currentUser);
+  constructor(tables: TablesDB, databaseId: string, writer: RowWriter) {
+    super(tables, databaseId, APPWRITE_TABLES.categories, writer);
   }
 
   protected rowId(category: Category): string {
@@ -107,12 +104,8 @@ export class AppwriteTopicRepository
   extends AppwriteRepository<Topic>
   implements TopicRepository
 {
-  constructor(
-    tables: TablesDB,
-    databaseId: string,
-    currentUser: CurrentUserIdProvider
-  ) {
-    super(tables, databaseId, APPWRITE_TABLES.topics, currentUser);
+  constructor(tables: TablesDB, databaseId: string, writer: RowWriter) {
+    super(tables, databaseId, APPWRITE_TABLES.topics, writer);
   }
 
   protected rowId(topic: Topic): string {
@@ -155,12 +148,8 @@ export class AppwriteTaskRepository
   extends AppwriteRepository<Task>
   implements TaskRepository
 {
-  constructor(
-    tables: TablesDB,
-    databaseId: string,
-    currentUser: CurrentUserIdProvider
-  ) {
-    super(tables, databaseId, APPWRITE_TABLES.tasks, currentUser);
+  constructor(tables: TablesDB, databaseId: string, writer: RowWriter) {
+    super(tables, databaseId, APPWRITE_TABLES.tasks, writer);
   }
 
   protected rowId(task: Task): string {
@@ -200,12 +189,8 @@ export class AppwriteWeeklyPoolRepository
   extends AppwriteRepository<WeeklyPoolEntry>
   implements WeeklyPoolRepository
 {
-  constructor(
-    tables: TablesDB,
-    databaseId: string,
-    currentUser: CurrentUserIdProvider
-  ) {
-    super(tables, databaseId, APPWRITE_TABLES.weeklyPoolEntries, currentUser);
+  constructor(tables: TablesDB, databaseId: string, writer: RowWriter) {
+    super(tables, databaseId, APPWRITE_TABLES.weeklyPoolEntries, writer);
   }
 
   protected rowId(entry: WeeklyPoolEntry): string {
@@ -254,12 +239,8 @@ export class AppwriteActivityLogRepository
   extends AppwriteRepository<ActivityLog>
   implements ActivityLogRepository
 {
-  constructor(
-    tables: TablesDB,
-    databaseId: string,
-    currentUser: CurrentUserIdProvider
-  ) {
-    super(tables, databaseId, APPWRITE_TABLES.activityLogs, currentUser);
+  constructor(tables: TablesDB, databaseId: string, writer: RowWriter) {
+    super(tables, databaseId, APPWRITE_TABLES.activityLogs, writer);
   }
 
   protected rowId(log: ActivityLog): string {
@@ -306,12 +287,8 @@ export class AppwriteActivityEventRepository
   extends AppwriteRepository<ActivityEvent>
   implements ActivityEventRepository
 {
-  constructor(
-    tables: TablesDB,
-    databaseId: string,
-    currentUser: CurrentUserIdProvider
-  ) {
-    super(tables, databaseId, APPWRITE_TABLES.activityEvents, currentUser);
+  constructor(tables: TablesDB, databaseId: string, writer: RowWriter) {
+    super(tables, databaseId, APPWRITE_TABLES.activityEvents, writer);
   }
 
   protected rowId(event: ActivityEvent): string {
@@ -340,12 +317,8 @@ export class AppwriteMilestoneRepository
   extends AppwriteRepository<Milestone>
   implements MilestoneRepository
 {
-  constructor(
-    tables: TablesDB,
-    databaseId: string,
-    currentUser: CurrentUserIdProvider
-  ) {
-    super(tables, databaseId, APPWRITE_TABLES.milestones, currentUser);
+  constructor(tables: TablesDB, databaseId: string, writer: RowWriter) {
+    super(tables, databaseId, APPWRITE_TABLES.milestones, writer);
   }
 
   protected rowId(milestone: Milestone): string {
@@ -384,8 +357,13 @@ export class AppwriteWorkspaceRepository implements WorkspaceRepository {
   constructor(
     private readonly tables: TablesDB,
     private readonly databaseId: string,
-    private readonly currentUser: CurrentUserIdProvider
+    private readonly currentUser: CurrentUserIdProvider,
+    private readonly writer: WorkspaceWriter
   ) {}
+
+  async create(workspace: Workspace): Promise<Workspace> {
+    return rowToWorkspace(await this.writer.createWorkspace(workspace));
+  }
 
   async findById(workspaceId: WorkspaceId): Promise<Workspace | null> {
     try {
@@ -415,7 +393,7 @@ export class AppwriteWorkspaceRepository implements WorkspaceRepository {
       throw new Error('Only the workspace owner can save a workspace.');
     }
 
-    const row = await this.tables.upsertRow<StoredRow>({
+    const row = await this.tables.updateRow<StoredRow>({
       databaseId: this.databaseId,
       tableId: APPWRITE_TABLES.workspaces,
       rowId: workspace.id,
@@ -555,16 +533,17 @@ export class AppwriteWorkspaceRepository implements WorkspaceRepository {
 export function createAppwriteRepositories(
   tables: TablesDB,
   databaseId: string,
-  currentUser: CurrentUserIdProvider
+  currentUser: CurrentUserIdProvider,
+  writer: WorkspaceWriter
 ) {
   return {
-    workspaces: new AppwriteWorkspaceRepository(tables, databaseId, currentUser),
-    categories: new AppwriteCategoryRepository(tables, databaseId, currentUser),
-    topics: new AppwriteTopicRepository(tables, databaseId, currentUser),
-    tasks: new AppwriteTaskRepository(tables, databaseId, currentUser),
-    weeklyPool: new AppwriteWeeklyPoolRepository(tables, databaseId, currentUser),
-    activityLogs: new AppwriteActivityLogRepository(tables, databaseId, currentUser),
-    activityEvents: new AppwriteActivityEventRepository(tables, databaseId, currentUser),
-    milestones: new AppwriteMilestoneRepository(tables, databaseId, currentUser)
+    workspaces: new AppwriteWorkspaceRepository(tables, databaseId, currentUser, writer),
+    categories: new AppwriteCategoryRepository(tables, databaseId, writer),
+    topics: new AppwriteTopicRepository(tables, databaseId, writer),
+    tasks: new AppwriteTaskRepository(tables, databaseId, writer),
+    weeklyPool: new AppwriteWeeklyPoolRepository(tables, databaseId, writer),
+    activityLogs: new AppwriteActivityLogRepository(tables, databaseId, writer),
+    activityEvents: new AppwriteActivityEventRepository(tables, databaseId, writer),
+    milestones: new AppwriteMilestoneRepository(tables, databaseId, writer)
   } as const;
 }
