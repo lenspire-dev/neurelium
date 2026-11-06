@@ -219,6 +219,12 @@ export class AppwriteWeeklyPoolRepository
     return this.listEntities(workspaceId, [Query.equal('weekStart', weekStart)]);
   }
 
+  listByWorkspace(
+    workspaceId: WorkspaceId
+  ): Promise<readonly WeeklyPoolEntry[]> {
+    return this.listEntities(workspaceId);
+  }
+
   listByTask(
     workspaceId: WorkspaceId,
     taskId: TaskId

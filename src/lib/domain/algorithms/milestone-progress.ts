@@ -1,6 +1,5 @@
 import type { Milestone, MilestoneProgress, PaceStatus } from '../models/analytics';
 import type { IsoDate, IsoDateTime } from '../models/common';
-import type { ActivityLog } from '../models/execution';
 import type { Category, Task, Topic } from '../models/hierarchy';
 import type { TaskId } from '../models/identifiers';
 import { collectCategorySubtreeIds } from './hierarchy';
@@ -14,7 +13,6 @@ export interface MilestoneProgressContext {
   readonly categories: readonly Category[];
   readonly topics: readonly Topic[];
   readonly tasks: readonly Task[];
-  readonly activityLogs: readonly ActivityLog[];
 }
 
 export function calculateMilestoneProgress(
@@ -37,14 +35,15 @@ export function calculateMilestoneProgress(
   );
 
   const scopeTasks = context.tasks.filter((task) => scopeTopicIds.has(task.topicId));
-  const taskIds = new Set<TaskId>(scopeTasks.map((task) => task.id));
-  const completedTaskIds = new Set<TaskId>();
-
-  for (const log of context.activityLogs) {
-    if (!taskIds.has(log.taskId)) continue;
-    if (log.completedDate > context.today) continue;
-    completedTaskIds.add(log.taskId);
-  }
+  const completedTaskIds = new Set<TaskId>(
+    scopeTasks
+      .filter(
+        (task) =>
+          task.status === 'done' &&
+          (task.doneDate === null || task.doneDate <= context.today)
+      )
+      .map((task) => task.id)
+  );
 
   const totalWeight = sumWeights(scopeTasks);
   const completedWeight = sumWeights(

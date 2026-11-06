@@ -40,6 +40,37 @@ const CONTENT_TABLES = new Set([
 ]);
 const REQUIRED_ROLES = new Set(['owner', 'admin', 'member']);
 const INVITE_ROLES = new Set(['admin', 'member', 'viewer']);
+const TASK_STATUSES = new Set(['todo', 'in_progress', 'done', 'skipped']);
+const CATEGORY_STATUSES = new Set(['todo', 'in_progress', 'done']);
+const ACTIVITY_ACTIONS = new Set([
+  'created',
+  'updated',
+  'deleted',
+  'scheduled',
+  'unscheduled',
+  'moved',
+  'completed',
+  'uncompleted',
+  'status_changed',
+  'imported',
+  'member_invited',
+  'member_joined',
+  'member_removed',
+  'role_changed'
+]);
+const ACTIVITY_ENTITY_TYPES = new Set([
+  'workspace',
+  'category',
+  'topic',
+  'task',
+  'weekly_entry',
+  'completion',
+  'milestone',
+  'import',
+  'member',
+  'invitation'
+]);
+const MILESTONE_SCOPE_KINDS = new Set(['category', 'topic']);
 const COLORS = new Set([
   'amber',
   'lime',
@@ -74,6 +105,60 @@ function optionalText(value, path) {
   if (trimmed === '') return null;
   if ([...trimmed].length > 16) throw new AppError(`${path} must be a short emoji.`);
   return trimmed;
+}
+
+function nullableText(value, path) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new AppError(`${path} must be a string.`);
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function optionalId(value, path) {
+  if (value === undefined || value === null || value === '') return null;
+  return text(value, path);
+}
+
+function isoDate(value, path, optional = false) {
+  if (optional && (value === undefined || value === null || value === '')) return null;
+  const result = text(value, path);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(result)) {
+    throw new AppError(`${path} must be an ISO date.`);
+  }
+  return result;
+}
+
+function isoDateTime(value, path, optional = false) {
+  if (optional && (value === undefined || value === null || value === '')) return null;
+  const result = text(value, path);
+  if (Number.isNaN(Date.parse(result))) {
+    throw new AppError(`${path} must be an ISO timestamp.`);
+  }
+  return result;
+}
+
+function enumText(value, path, allowed) {
+  const result = text(value, path);
+  if (!allowed.has(result)) throw new AppError(`${path} is not a supported value.`);
+  return result;
+}
+
+function status(value, path) {
+  return value === undefined || value === null
+    ? 'todo'
+    : enumText(value, path, TASK_STATUSES);
+}
+
+function categoryStatus(value, path) {
+  if (value === undefined || value === null || value === '') return null;
+  return enumText(value, path, CATEGORY_STATUSES);
+}
+
+function rejectUnknownKeys(input, allowed, path) {
+  for (const key of Object.keys(input)) {
+    if (key === '$id' || key === '$permissions') continue;
+    if (!allowed.has(key)) throw new AppError(`${path}.${key} is not allowed.`);
+  }
 }
 
 function weight(value, path) {
@@ -138,6 +223,25 @@ function parseCategory(value, path) {
       parseCategory(child, `${path}.subcategories[${index}]`)
     )
   };
+}
+
+function countTreeRows(node) {
+  const own = {
+    categories: 1,
+    topics: node.topics.length,
+    tasks: node.topics.reduce((total, topic) => total + topic.tasks.length, 0)
+  };
+  return node.subcategories.reduce(
+    (total, child) => {
+      const nested = countTreeRows(child);
+      return {
+        categories: total.categories + nested.categories,
+        topics: total.topics + nested.topics,
+        tasks: total.tasks + nested.tasks
+      };
+    },
+    own
+  );
 }
 
 function contentPermissions(userId, workspaceId) {
@@ -325,14 +429,15 @@ async function importTree(context, body) {
 
   const { limits } = await readPlan(tables, users, workspace.ownerId);
   const tree = parseCategory(body.tree, 'category');
+  const incoming = countTreeRows(tree);
+  if (incoming.categories + incoming.topics + incoming.tasks > limits.maxRowsPerImport) {
+    throw new AppError(`Import is limited to ${limits.maxRowsPerImport} rows.`);
+  }
   const now = new Date().toISOString();
   const rows = { categories: [], topics: [], tasks: [] };
   const rowPermissions = contentPermissions(userId, workspaceId);
 
   function createNode(node, parentId) {
-    if (rows.categories.length + rows.topics.length + rows.tasks.length >= limits.maxRowsPerImport) {
-      throw new AppError(`Import is limited to ${limits.maxRowsPerImport} rows.`);
-    }
     const categoryId = ID.unique();
     rows.categories.push({
       $id: categoryId,
@@ -428,7 +533,7 @@ async function importTree(context, body) {
 }
 
 async function createRow(context, body) {
-  const { userId, tables, userTables, adminTeams, users } = context;
+  const { userId, actor, tables, userTables, adminTeams, users } = context;
   const tableId = text(body.tableId, 'tableId');
   if (!CONTENT_TABLES.has(tableId)) {
     throw new AppError('This row cannot be created through this function.');
@@ -445,9 +550,7 @@ async function createRow(context, body) {
     await assertMilestoneCapacity(tables, users, workspaceId, workspace.ownerId);
   }
 
-  const data = { ...input, workspaceId };
-  delete data.$id;
-  delete data.$permissions;
+  const data = await sanitizeRow(tables, tableId, input, workspaceId, userId, actor);
   const row = await tables.createRow({
     databaseId: DATABASE_ID,
     tableId,
@@ -456,6 +559,249 @@ async function createRow(context, body) {
     permissions: contentPermissions(userId, workspaceId)
   });
   return { row };
+}
+
+async function sanitizeRow(tables, tableId, input, workspaceId, userId, actor) {
+  const base = { workspaceId };
+  const createdAt = () => isoDateTime(input.createdAt, 'data.createdAt');
+  const updatedAt = () => isoDateTime(input.updatedAt, 'data.updatedAt');
+
+  switch (tableId) {
+    case TABLES.categories: {
+      rejectUnknownKeys(
+        input,
+        new Set([
+          'workspaceId',
+          'parentId',
+          'name',
+          'icon',
+          'color',
+          'importanceWeight',
+          'statusOverride',
+          'createdAt',
+          'updatedAt'
+        ]),
+        'data'
+      );
+      const parentId = optionalId(input.parentId, 'data.parentId');
+      if (parentId !== null) {
+        await requireScopedRow(tables, TABLES.categories, parentId, workspaceId, 'Parent category');
+      }
+      return {
+        ...base,
+        parentId,
+        name: text(input.name, 'data.name'),
+        icon: optionalText(input.icon, 'data.icon'),
+        color: color(input.color, 'data.color'),
+        importanceWeight: weight(input.importanceWeight, 'data.importanceWeight'),
+        statusOverride: categoryStatus(input.statusOverride, 'data.statusOverride'),
+        createdAt: createdAt(),
+        updatedAt: updatedAt()
+      };
+    }
+    case TABLES.topics: {
+      rejectUnknownKeys(
+        input,
+        new Set(['workspaceId', 'categoryId', 'name', 'createdAt', 'updatedAt']),
+        'data'
+      );
+      const categoryId = text(input.categoryId, 'data.categoryId');
+      await requireScopedRow(tables, TABLES.categories, categoryId, workspaceId, 'Category');
+      return {
+        ...base,
+        categoryId,
+        name: text(input.name, 'data.name'),
+        createdAt: createdAt(),
+        updatedAt: updatedAt()
+      };
+    }
+    case TABLES.tasks: {
+      rejectUnknownKeys(
+        input,
+        new Set([
+          'workspaceId',
+          'topicId',
+          'title',
+          'icon',
+          'taskWeight',
+          'status',
+          'statusChangedAt',
+          'doneDate',
+          'createdAt',
+          'updatedAt'
+        ]),
+        'data'
+      );
+      const topicId = text(input.topicId, 'data.topicId');
+      await requireScopedRow(tables, TABLES.topics, topicId, workspaceId, 'Topic');
+      return {
+        ...base,
+        topicId,
+        title: text(input.title, 'data.title'),
+        icon: optionalText(input.icon, 'data.icon'),
+        taskWeight: weight(input.taskWeight, 'data.taskWeight'),
+        status: status(input.status, 'data.status'),
+        statusChangedAt: isoDateTime(input.statusChangedAt, 'data.statusChangedAt', true),
+        doneDate: isoDate(input.doneDate, 'data.doneDate', true),
+        createdAt: createdAt(),
+        updatedAt: updatedAt()
+      };
+    }
+    case TABLES.weeklyPoolEntries: {
+      rejectUnknownKeys(
+        input,
+        new Set([
+          'workspaceId',
+          'taskId',
+          'weekStart',
+          'plannedDate',
+          'status',
+          'completedDate',
+          'createdAt'
+        ]),
+        'data'
+      );
+      const taskId = text(input.taskId, 'data.taskId');
+      await requireScopedRow(tables, TABLES.tasks, taskId, workspaceId, 'Task');
+      return {
+        ...base,
+        taskId,
+        weekStart: isoDate(input.weekStart, 'data.weekStart'),
+        plannedDate: isoDate(input.plannedDate, 'data.plannedDate', true),
+        status: status(input.status, 'data.status'),
+        completedDate: isoDate(input.completedDate, 'data.completedDate', true),
+        createdAt: createdAt()
+      };
+    }
+    case TABLES.activityLogs: {
+      rejectUnknownKeys(
+        input,
+        new Set([
+          'workspaceId',
+          'taskId',
+          'entryId',
+          'completedDate',
+          'note',
+          'taskName',
+          'topicName',
+          'categoryName',
+          'createdAt'
+        ]),
+        'data'
+      );
+      const taskId = text(input.taskId, 'data.taskId');
+      await requireScopedRow(tables, TABLES.tasks, taskId, workspaceId, 'Task');
+      const entryId = optionalId(input.entryId, 'data.entryId');
+      if (entryId !== null) {
+        await requireScopedRow(
+          tables,
+          TABLES.weeklyPoolEntries,
+          entryId,
+          workspaceId,
+          'Weekly pool entry'
+        );
+      }
+      return {
+        ...base,
+        taskId,
+        entryId,
+        completedDate: isoDate(input.completedDate, 'data.completedDate'),
+        note: nullableText(input.note, 'data.note'),
+        taskName: nullableText(input.taskName, 'data.taskName'),
+        topicName: nullableText(input.topicName, 'data.topicName'),
+        categoryName: nullableText(input.categoryName, 'data.categoryName'),
+        createdAt: createdAt()
+      };
+    }
+    case TABLES.activityEvents: {
+      rejectUnknownKeys(
+        input,
+        new Set([
+          'workspaceId',
+          'actorId',
+          'actorName',
+          'action',
+          'entityType',
+          'entityId',
+          'entityName',
+          'contextName',
+          'detail',
+          'createdAt'
+        ]),
+        'data'
+      );
+      return {
+        ...base,
+        actorId: userId,
+        actorName: actor.name || actor.email || 'Unknown member',
+        action: enumText(input.action, 'data.action', ACTIVITY_ACTIONS),
+        entityType: enumText(input.entityType, 'data.entityType', ACTIVITY_ENTITY_TYPES),
+        entityId: text(input.entityId, 'data.entityId'),
+        entityName: text(input.entityName, 'data.entityName'),
+        contextName: nullableText(input.contextName, 'data.contextName'),
+        detail: nullableText(input.detail, 'data.detail'),
+        createdAt: createdAt()
+      };
+    }
+    case TABLES.milestones: {
+      rejectUnknownKeys(
+        input,
+        new Set([
+          'workspaceId',
+          'title',
+          'scopeKind',
+          'scopeId',
+          'targetPercentage',
+          'dueDate',
+          'createdAt',
+          'updatedAt'
+        ]),
+        'data'
+      );
+      const scopeKind = enumText(input.scopeKind, 'data.scopeKind', MILESTONE_SCOPE_KINDS);
+      const scopeId = text(input.scopeId, 'data.scopeId');
+      await requireScopedRow(
+        tables,
+        scopeKind === 'category' ? TABLES.categories : TABLES.topics,
+        scopeId,
+        workspaceId,
+        scopeKind === 'category' ? 'Category' : 'Topic'
+      );
+      return {
+        ...base,
+        title: text(input.title, 'data.title'),
+        scopeKind,
+        scopeId,
+        targetPercentage: percentage(input.targetPercentage, 'data.targetPercentage'),
+        dueDate: isoDate(input.dueDate, 'data.dueDate'),
+        createdAt: createdAt(),
+        updatedAt: updatedAt()
+      };
+    }
+    default:
+      throw new AppError('This row cannot be created through this function.');
+  }
+}
+
+function percentage(value, path) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 100) {
+    throw new AppError(`${path} must be a number greater than 0 and at most 100.`);
+  }
+  return value;
+}
+
+async function requireScopedRow(tables, tableId, rowId, workspaceId, label) {
+  let row;
+  try {
+    row = await tables.getRow({ databaseId: DATABASE_ID, tableId, rowId });
+  } catch (error) {
+    if (error?.code === 404) throw new AppError(`${label} not found.`);
+    throw error;
+  }
+  if (row.workspaceId !== workspaceId) {
+    throw new AppError(`${label} does not belong to this workspace.`);
+  }
+  return row;
 }
 
 async function createWorkspace(context, body) {

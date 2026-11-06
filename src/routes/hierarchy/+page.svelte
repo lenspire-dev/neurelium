@@ -407,7 +407,7 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
   async function deleteTask(task: Task) {
     const confirmed = await askConfirm({
       title: 'Delete task?',
-      description: `Delete "${task.title}"? Its completion history stays in the activity log.`,
+      description: `Delete "${task.title}"? Its week entries and completion history will also be removed.`,
       confirmLabel: 'Delete',
       destructive: true
     });
@@ -632,15 +632,17 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
                   <Button size="sm" onclick={() => openTopicCreate(selected!.id)}>
                     <Plus class="size-4" /> Topic
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="size-9 text-muted-foreground hover:text-destructive"
-                    aria-label="Delete category {selected.name}"
-                    onclick={() => deleteCategory(selected!)}
-                  >
-                    <Trash2 class="size-4" />
-                  </Button>
+                  {#if app.canDelete}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-9 text-muted-foreground hover:text-destructive"
+                      aria-label="Delete category {selected.name}"
+                      onclick={() => deleteCategory(selected!)}
+                    >
+                      <Trash2 class="size-4" />
+                    </Button>
+                  {/if}
                 </div>
               </div>
 
@@ -698,15 +700,17 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
                         >
                           <Pencil class="size-3.5" />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="size-10 text-muted-foreground hover:text-destructive"
-                          aria-label="Delete topic {topic.name}"
-                          onclick={() => deleteTopic(topic)}
-                        >
-                          <Trash2 class="size-3.5" />
-                        </Button>
+                        {#if app.canDelete}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            class="size-10 text-muted-foreground hover:text-destructive"
+                            aria-label="Delete topic {topic.name}"
+                            onclick={() => deleteTopic(topic)}
+                          >
+                            <Trash2 class="size-3.5" />
+                          </Button>
+                        {/if}
                       </div>
                     </div>
 
@@ -752,15 +756,17 @@ import type { CategoryStatus } from '#lib/domain/models/category-status.js';
                             >
                               <Pencil class="size-3.5" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              class="size-10 text-muted-foreground hover:text-destructive"
-                              aria-label="Delete task {task.title}"
-                              onclick={() => deleteTask(task)}
-                            >
-                              <Trash2 class="size-3.5" />
-                            </Button>
+                            {#if app.canDelete}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                class="size-10 text-muted-foreground hover:text-destructive"
+                                aria-label="Delete task {task.title}"
+                                onclick={() => deleteTask(task)}
+                              >
+                                <Trash2 class="size-3.5" />
+                              </Button>
+                            {/if}
                           </li>
                         {/each}
                       </ul>

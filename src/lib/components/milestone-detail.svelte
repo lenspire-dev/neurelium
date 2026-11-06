@@ -26,6 +26,7 @@
     context,
     inCurrentWeek,
     busy = false,
+    canDelete = true,
     onClose,
     onEdit,
     onDelete,
@@ -37,6 +38,7 @@
     context: MilestoneContext;
     inCurrentWeek: ReadonlySet<string>;
     busy?: boolean;
+    canDelete?: boolean;
     onClose: () => void;
     onEdit: () => void;
     onDelete: () => void;
@@ -305,13 +307,17 @@
   </section>
 
   <div class="mt-5 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-    <Button
-      variant="ghost"
-      class="text-destructive hover:bg-destructive/10 hover:text-destructive"
-      onclick={onDelete}
-    >
-      <Trash2 class="size-4" /> Delete
-    </Button>
+    {#if canDelete}
+      <Button
+        variant="ghost"
+        class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+        onclick={onDelete}
+      >
+        <Trash2 class="size-4" /> Delete
+      </Button>
+    {:else}
+      <span></span>
+    {/if}
     <div class="flex gap-2">
       <Button variant="ghost" onclick={onClose}>Close</Button>
       <Button onclick={onEdit}>

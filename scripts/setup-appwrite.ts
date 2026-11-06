@@ -6,7 +6,8 @@ import {
 } from 'node-appwrite';
 import {
   APPWRITE_SCHEMA,
-  DEFAULT_APPWRITE_DATABASE_ID
+  DEFAULT_APPWRITE_DATABASE_ID,
+  type AppwriteTableId
 } from '../src/lib/infrastructure/appwrite/schema';
 
 function requiredEnv(name: string): string {
@@ -41,7 +42,26 @@ for (const definition of APPWRITE_SCHEMA) {
   await ensureTable(definition);
 }
 
+if (process.argv.includes('--prune')) {
+  await pruneUnmanagedTables();
+}
+
 console.log(`Appwrite schema is ready in database "${databaseId}".`);
+
+async function pruneUnmanagedTables(): Promise<void> {
+  const known = new Set<string>(
+    APPWRITE_SCHEMA.map((definition) => definition.id)
+  );
+  const result = await tables.listTables({ databaseId });
+  for (const table of result.tables) {
+    if (known.has(table.$id)) continue;
+    await tables.deleteTable({
+      databaseId,
+      tableId: table.$id as AppwriteTableId
+    });
+    console.log(`Dropped unmanaged table "${table.$id}".`);
+  }
+}
 
 async function ensureDatabase(): Promise<void> {
   try {

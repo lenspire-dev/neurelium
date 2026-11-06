@@ -62,7 +62,9 @@ import {
   createMilestone,
   createTask,
   createTopic,
+  deleteCategorySubtree,
   deleteMilestone,
+  deleteTask as deleteTaskUseCase,
   removeRepeatedCompletion,
   removeWeeklyPoolEntry,
   repeatTaskCompletion,
@@ -265,6 +267,10 @@ export class AppStore {
     return this.workspaceRole === 'owner' || this.workspaceRole === 'admin';
   }
 
+  get canDelete(): boolean {
+    return this.workspaceRole === 'owner';
+  }
+
   get canWrite(): boolean {
     return this.workspaceRole !== 'viewer';
   }
@@ -277,6 +283,9 @@ export class AppStore {
   }): Promise<void> {
     const current = this.workspace;
     if (current === null) return;
+    if (current.ownerId !== this.user?.id) {
+      throw new Error('Only the workspace owner can change settings.');
+    }
     await this.withBusy(async () => {
       const infra = this.requireInfrastructure();
       const workspace: Workspace = {
@@ -315,9 +324,14 @@ export class AppStore {
     this.membersLoading = true;
     try {
       const infra = this.requireInfrastructure();
-      const created = await infra.team.ensureTeam(this.workspace);
-      if (created && this.workspace.ownerId === this.user?.id) {
-        await infra.workspaces.migratePermissions(this.workspace);
+      const isOwner = this.workspace.ownerId === this.user?.id;
+      if (isOwner && (await infra.team.ensureTeam(this.workspace))) {
+        const saved = await infra.workspaces.save(this.workspace);
+        await infra.workspaces.migratePermissions(saved);
+        this.workspace = saved;
+        this.workspaces = this.workspaces.map((item) =>
+          item.id === saved.id ? saved : item
+        );
       }
       this.members = await infra.team.listMembers(this.workspace);
     } catch (error) {
@@ -332,9 +346,20 @@ export class AppStore {
     role: Exclude<WorkspaceRole, 'owner'>
   ): Promise<void> {
     if (this.workspace === null) return;
+    if (!this.canManageMembers) {
+      throw new Error('You do not have permission to invite members.');
+    }
     await this.withBusy(async () => {
       const infra = this.requireInfrastructure();
-      await infra.team.ensureTeam(this.workspace!);
+      const isOwner = this.workspace!.ownerId === this.user?.id;
+      if (isOwner && (await infra.team.ensureTeam(this.workspace!))) {
+        const saved = await infra.workspaces.save(this.workspace!);
+        await infra.workspaces.migratePermissions(saved);
+        this.workspace = saved;
+        this.workspaces = this.workspaces.map((item) =>
+          item.id === saved.id ? saved : item
+        );
+      }
       await infra.team.invite(
         this.workspace!,
         email,
@@ -357,6 +382,9 @@ export class AppStore {
     role: Exclude<WorkspaceRole, 'owner'>
   ): Promise<void> {
     if (this.workspace === null) return;
+    if (!this.canManageMembers) {
+      throw new Error('You do not have permission to change member roles.');
+    }
     await this.withBusy(async () => {
       const infra = this.requireInfrastructure();
       const member = this.members.find((item) => item.membershipId === membershipId);
@@ -376,6 +404,9 @@ export class AppStore {
 
   async removeMember(membershipId: string): Promise<void> {
     if (this.workspace === null) return;
+    if (!this.canManageMembers) {
+      throw new Error('You do not have permission to remove members.');
+    }
     const member = this.members.find((item) => item.membershipId === membershipId);
     await this.withBusy(async () => {
       const infra = this.requireInfrastructure();
@@ -394,6 +425,9 @@ export class AppStore {
 
   async deleteWorkspace(): Promise<void> {
     if (this.workspace === null) return;
+    if (!this.canDelete) {
+      throw new Error('Only the workspace owner can delete it.');
+    }
     await this.withBusy(async () => {
       const infra = this.requireInfrastructure();
       const workspace = this.workspace!;
@@ -618,6 +652,7 @@ export class AppStore {
     if (entry === undefined) return;
     const logsBefore = this.activityLogs;
     const weekEntriesBefore = this.weekEntries;
+    const tasksBefore = this.tasks;
     const now = new Date().toISOString();
     const tempId = asActivityLogId(`optimistic-${++this.optimisticSeq}`);
     const task = this.tasks.find((item) => item.id === id);
@@ -639,6 +674,15 @@ export class AppStore {
       }
     ];
     this.replaceEntry({ ...entry, status: 'done', completedDate: today });
+    if (task !== undefined) {
+      this.tasks = this.upsert(this.tasks, {
+        ...task,
+        status: 'done',
+        statusChangedAt: task.status === 'done' ? task.statusChangedAt : now,
+        doneDate: today,
+        updatedAt: now
+      });
+    }
     this.recomputeDerived();
 
     await this.queueWrite(`entry:${entry.id}`, () =>
@@ -666,6 +710,7 @@ export class AppStore {
         () => {
           this.activityLogs = logsBefore;
           this.weekEntries = weekEntriesBefore;
+          this.tasks = tasksBefore;
           this.recomputeDerived();
           this.scheduleRefresh();
         }
@@ -740,6 +785,7 @@ export class AppStore {
     if (entry.status === status && (status !== 'done' || entry.completedDate !== null)) return;
     const weekEntriesBefore = this.weekEntries;
     const logsBefore = this.activityLogs;
+    const tasksBefore = this.tasks;
     const today = this.today;
     const task = this.tasks.find((item) => item.id === entry.taskId);
     const topic = task === undefined ? undefined : this.topicForTask(task);
@@ -789,6 +835,9 @@ export class AppStore {
             { workspaceId, entryId: id, status, completedDate: today }
           );
           this.replaceEntry(result.entry);
+          if (result.task !== null) {
+            this.tasks = this.upsert(this.tasks, result.task);
+          }
           if (result.log !== null) {
             this.activityLogs = this.activityLogs
               .filter((log) => log.entryId !== entry.id)
@@ -798,13 +847,14 @@ export class AppStore {
             await this.recordCompletionEvent(removedLog, 'uncompleted');
           }
           this.recomputeDerived();
-          if (task !== undefined) {
-            await this.recordTaskEvent(task, 'status_changed', status);
+          if (result.task !== null) {
+            await this.recordTaskEvent(result.task, 'status_changed', status);
           }
         },
         () => {
           this.weekEntries = weekEntriesBefore;
           this.activityLogs = logsBefore;
+          this.tasks = tasksBefore;
           this.recomputeDerived();
           this.scheduleRefresh();
         }
@@ -1002,17 +1052,28 @@ export class AppStore {
         .filter((topic) => categoryIds.has(topic.categoryId))
         .map((topic) => topic.id)
     );
-    const taskIds = this.tasks
-      .filter((task) => topicIds.has(task.topicId))
-      .map((task) => task.id);
+    const taskIds = new Set(
+      this.tasks
+        .filter((task) => topicIds.has(task.topicId))
+        .map((task) => task.id)
+    );
 
     await this.persist(async (infra, workspaceId) => {
-      for (const taskId of taskIds) await infra.tasks.delete(workspaceId, taskId);
-      for (const topicId of topicIds) await infra.topics.delete(workspaceId, topicId);
-      for (const id of categoryIds) await infra.categories.delete(workspaceId, id);
+      await deleteCategorySubtree(
+        {
+          categories: infra.categories,
+          topics: infra.topics,
+          tasks: infra.tasks,
+          weeklyPool: infra.weeklyPool,
+          activityLogs: infra.activityLogs
+        },
+        { workspaceId, categoryId: asCategoryId(categoryId) }
+      );
       this.categories = this.categories.filter((category) => !categoryIds.has(category.id));
       this.topics = this.topics.filter((topic) => !topicIds.has(topic.id));
-      this.tasks = this.tasks.filter((task) => !taskIds.includes(task.id));
+      this.tasks = this.tasks.filter((task) => !taskIds.has(task.id));
+      this.weekEntries = this.weekEntries.filter((entry) => !taskIds.has(entry.taskId));
+      this.activityLogs = this.activityLogs.filter((log) => !taskIds.has(log.taskId));
       this.recomputeDerived();
       await this.recordEvent({
         action: 'deleted',
@@ -1048,8 +1109,19 @@ export class AppStore {
   async removeTask(taskId: string): Promise<void> {
     const task = this.tasks.find((item) => item.id === taskId);
     await this.persist(async (infra, workspaceId) => {
-      await infra.tasks.delete(workspaceId, asTaskId(taskId));
+      await deleteTaskUseCase(
+        {
+          categories: infra.categories,
+          topics: infra.topics,
+          tasks: infra.tasks,
+          weeklyPool: infra.weeklyPool,
+          activityLogs: infra.activityLogs
+        },
+        { workspaceId, taskId: asTaskId(taskId) }
+      );
       this.tasks = this.tasks.filter((item) => item.id !== taskId);
+      this.weekEntries = this.weekEntries.filter((entry) => entry.taskId !== taskId);
+      this.activityLogs = this.activityLogs.filter((log) => log.taskId !== taskId);
       this.recomputeDerived();
       if (task !== undefined) await this.recordTaskEvent(task, 'deleted');
     });
@@ -1477,8 +1549,7 @@ export class AppStore {
         today: this.today,
         categories: this.categories,
         topics: this.topics,
-        tasks: this.tasks,
-        activityLogs: this.activityLogs
+        tasks: this.tasks
       })
     );
   }

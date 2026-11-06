@@ -111,21 +111,26 @@ export async function removeWeeklyPoolEntry(
   if (entry === null) throw new NotFoundError('Weekly pool entry not found.');
 
   const logs = await deps.activityLogs.listByTask(input.workspaceId, entry.taskId);
+  const hadCompletion = logs.some((log) => log.entryId === entry.id);
   for (const log of logs) {
     if (log.entryId === entry.id) {
       await deps.activityLogs.delete(input.workspaceId, log.id);
     }
   }
 
+  const remainingLogs = logs.filter((log) => log.entryId !== entry.id);
   const task = await deps.tasks.findById(input.workspaceId, entry.taskId);
   const resetTask =
-    task === null || task.status === 'todo'
-      ? task
-      : await setTaskStatus(deps, {
+    hadCompletion &&
+    remainingLogs.length === 0 &&
+    task !== null &&
+    task.status === 'done'
+      ? await setTaskStatus(deps, {
           workspaceId: input.workspaceId,
           taskId: entry.taskId,
           status: 'todo',
-        });
+        })
+      : task;
 
   await deps.weeklyPool.delete(input.workspaceId, input.entryId);
   return { task: resetTask };

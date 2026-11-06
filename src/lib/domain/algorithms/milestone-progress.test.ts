@@ -1,9 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Milestone, MilestoneScope } from '../models/analytics';
-import type { ActivityLog } from '../models/execution';
 import type { Category, Task, Topic } from '../models/hierarchy';
 import {
-  asActivityLogId,
   asCategoryId,
   asMilestoneId,
   asTaskId,
@@ -60,18 +58,16 @@ function task(id: string, topicId: string, taskWeight: number): Task {
   };
 }
 
-function log(id: string, taskId: string, completedDate: string): ActivityLog {
+function doneTask(
+  id: string,
+  topicId: string,
+  taskWeight: number,
+  doneDate = '2026-10-15'
+): Task {
   return {
-    id: asActivityLogId(id),
-    workspaceId,
-    taskId: asTaskId(taskId),
-    entryId: null,
-    completedDate,
-    note: null,
-    taskName: null,
-    topicName: null,
-    categoryName: null,
-    createdAt: timestamp,
+    ...task(id, topicId, taskWeight),
+    status: 'done',
+    doneDate,
   };
 }
 
@@ -102,7 +98,6 @@ function context(overrides: Partial<MilestoneProgressContext> = {}): MilestonePr
     categories: [],
     topics: [],
     tasks: [],
-    activityLogs: [],
     ...overrides,
   };
 }
@@ -119,10 +114,9 @@ describe('calculateMilestoneProgress', () => {
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
         tasks: [
-          task('light', 'math-topic', 1),
+          doneTask('light', 'math-topic', 1, '2026-10-30'),
           task('heavy', 'math-topic', 9),
         ],
-        activityLogs: [log('log-light', 'light', '2026-10-30')],
       })
     );
 
@@ -147,11 +141,10 @@ describe('calculateMilestoneProgress', () => {
           topic('physics-topic', 'Physics'),
         ],
         tasks: [
-          task('algebra-a', 'algebra-topic', 9),
+          doneTask('algebra-a', 'algebra-topic', 9, '2026-10-30'),
           task('algebra-b', 'algebra-topic', 1),
           task('physics-a', 'physics-topic', 100),
         ],
-        activityLogs: [log('log-algebra', 'algebra-a', '2026-10-30')],
       })
     );
 
@@ -172,9 +165,8 @@ describe('calculateMilestoneProgress', () => {
         topics: [topic('algebra-topic', 'Math'), topic('geometry-topic', 'Math')],
         tasks: [
           task('algebra-a', 'algebra-topic', 5),
-          task('geometry-a', 'geometry-topic', 5),
+          doneTask('geometry-a', 'geometry-topic', 5, '2026-10-30'),
         ],
-        activityLogs: [log('log-geometry', 'geometry-a', '2026-10-30')],
       })
     );
 
@@ -183,16 +175,12 @@ describe('calculateMilestoneProgress', () => {
     expect(progress.completionPercentage).toBe(0);
   });
 
-  test('counts a task once even with duplicate completion logs', () => {
+  test('counts a task once even with repeated completions', () => {
     const progress = calculateMilestoneProgress(
       context({
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
-        tasks: [task('math-task', 'math-topic', 10)],
-        activityLogs: [
-          log('log-1', 'math-task', '2026-10-20'),
-          log('log-2', 'math-task', '2026-10-21'),
-        ],
+        tasks: [doneTask('math-task', 'math-topic', 10)],
       })
     );
 
@@ -207,8 +195,7 @@ describe('calculateMilestoneProgress', () => {
         today: '2026-10-31',
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
-        tasks: [task('math-task', 'math-topic', 10)],
-        activityLogs: [log('future', 'math-task', '2026-11-01')],
+        tasks: [doneTask('math-task', 'math-topic', 10, '2026-11-01')],
       })
     );
 
@@ -223,8 +210,7 @@ describe('calculateMilestoneProgress', () => {
         today: '2026-10-16',
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
-        tasks: [task('done', 'math-topic', 25), task('remaining', 'math-topic', 75)],
-        activityLogs: [log('log-done', 'done', '2026-10-15')],
+        tasks: [doneTask('done', 'math-topic', 25), task('remaining', 'math-topic', 75)],
       })
     );
 
@@ -242,8 +228,7 @@ describe('calculateMilestoneProgress', () => {
         today: '2026-10-16',
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
-        tasks: [task('done', 'math-topic', 40), task('remaining', 'math-topic', 60)],
-        activityLogs: [log('log-done', 'done', '2026-10-15')],
+        tasks: [doneTask('done', 'math-topic', 40), task('remaining', 'math-topic', 60)],
       })
     );
 
@@ -260,8 +245,7 @@ describe('calculateMilestoneProgress', () => {
         today: '2026-10-16',
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
-        tasks: [task('done', 'math-topic', 60), task('remaining', 'math-topic', 40)],
-        activityLogs: [log('log-done', 'done', '2026-10-15')],
+        tasks: [doneTask('done', 'math-topic', 60), task('remaining', 'math-topic', 40)],
       })
     );
 
@@ -276,8 +260,7 @@ describe('calculateMilestoneProgress', () => {
         today: '2026-10-16',
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
-        tasks: [task('done', 'math-topic', 55), task('remaining', 'math-topic', 45)],
-        activityLogs: [log('log-done', 'done', '2026-10-15')],
+        tasks: [doneTask('done', 'math-topic', 55), task('remaining', 'math-topic', 45)],
       })
     );
 
@@ -291,8 +274,7 @@ describe('calculateMilestoneProgress', () => {
         today: '2026-10-16',
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
-        tasks: [task('done', 'math-topic', 40), task('remaining', 'math-topic', 60)],
-        activityLogs: [log('log-done', 'done', '2026-10-15')],
+        tasks: [doneTask('done', 'math-topic', 40), task('remaining', 'math-topic', 60)],
       })
     );
 
@@ -307,8 +289,7 @@ describe('calculateMilestoneProgress', () => {
         today: '2026-10-16',
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
-        tasks: [task('done', 'math-topic', 46), task('remaining', 'math-topic', 54)],
-        activityLogs: [log('log-done', 'done', '2026-10-15')],
+        tasks: [doneTask('done', 'math-topic', 46), task('remaining', 'math-topic', 54)],
       })
     );
 
@@ -347,10 +328,9 @@ describe('calculateMilestoneProgress', () => {
       context({
         categories: [category('Math')],
         topics: [topic('math-topic', 'Math')],
-        tasks: [task('a', 'math-topic', 5), task('b', 'math-topic', 5)],
-        activityLogs: [
-          log('log-a', 'a', '2026-10-20'),
-          log('log-b', 'b', '2026-10-21'),
+        tasks: [
+          doneTask('a', 'math-topic', 5, '2026-10-20'),
+          doneTask('b', 'math-topic', 5, '2026-10-21'),
         ],
       })
     );

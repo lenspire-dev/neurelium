@@ -251,16 +251,18 @@
               </button>
             </div>
           {/if}
-          <Button
-            variant="ghost"
-            size="sm"
-            class="h-10 gap-1 px-2 text-xs text-muted-foreground"
-            aria-label="Remove {item.task.title} from this week"
-            disabled={app.busy}
-            onclick={() => remove(item.entry.id)}
-          >
-            <Trash2 class="size-4" /> Remove
-          </Button>
+          {#if app.canDelete}
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-10 gap-1 px-2 text-xs text-muted-foreground"
+              aria-label="Remove {item.task.title} from this week"
+              disabled={app.busy}
+              onclick={() => remove(item.entry.id)}
+            >
+              <Trash2 class="size-4" /> Remove
+            </Button>
+          {/if}
           {#if showToday && canComplete}
             <Button
               variant="outline"

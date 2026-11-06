@@ -389,13 +389,15 @@ function milestoneScope(
   );
   const tasks = context.tasks.filter((task) => topicIds.has(task.topicId));
   const taskIds = new Set(tasks.map((task) => task.id));
-  const completedTaskIds = new Set<TaskId>();
-
-  for (const log of context.activityLogs) {
-    if (!taskIds.has(log.taskId)) continue;
-    if (log.completedDate > context.today) continue;
-    completedTaskIds.add(log.taskId);
-  }
+  const completedTaskIds = new Set<TaskId>(
+    tasks
+      .filter(
+        (task) =>
+          task.status === 'done' &&
+          (task.doneDate === null || task.doneDate <= context.today)
+      )
+      .map((task) => task.id)
+  );
 
   return { tasks, taskIds, completedTaskIds };
 }

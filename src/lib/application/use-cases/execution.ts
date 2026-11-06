@@ -15,6 +15,7 @@ import type { TopicRepository } from '../../domain/ports/topic-repository';
 import type { WeeklyPoolRepository } from '../../domain/ports/weekly-pool-repository';
 import { ConflictError, NotFoundError, ValidationError } from '../errors';
 import { optionalNote, requireIsoDate, requireWeekStart } from '../validation';
+import { setTaskStatus } from './hierarchy';
 
 export interface ExecutionDependencies {
   readonly tasks: TaskRepository;
@@ -81,6 +82,13 @@ export async function completeTask(
     ...entry,
     status: 'done',
     completedDate,
+  });
+
+  await setTaskStatus(deps, {
+    workspaceId: input.workspaceId,
+    taskId: input.taskId,
+    status: 'done',
+    doneDate: completedDate,
   });
 
   return log;
@@ -219,12 +227,18 @@ export interface SetWeeklyEntryStatusInput {
 export async function setWeeklyEntryStatus(
   deps: ExecutionDependencies,
   input: SetWeeklyEntryStatusInput
-): Promise<{ entry: WeeklyPoolEntry; log: ActivityLog | null }> {
+): Promise<{ entry: WeeklyPoolEntry; log: ActivityLog | null; task: Task | null }> {
   const entry = await deps.weeklyPool.findById(input.workspaceId, input.entryId);
   if (entry === null) throw new NotFoundError('Weekly pool entry not found.');
 
   if (input.status === 'done') {
-    if (entry.status === 'done') return { entry, log: null };
+    if (entry.status === 'done') {
+      return {
+        entry,
+        log: null,
+        task: await deps.tasks.findById(input.workspaceId, entry.taskId)
+      };
+    }
     const completedDate =
       input.completedDate ?? deps.clock.now().toISOString().slice(0, 10);
     const log = await completeTask(deps, {
@@ -236,18 +250,38 @@ export async function setWeeklyEntryStatus(
     });
     return {
       entry: { ...entry, status: 'done', completedDate },
-      log
+      log,
+      task: await deps.tasks.findById(input.workspaceId, entry.taskId)
     };
   }
 
+  const wasCompleted = entry.status === 'done' || entry.completedDate !== null;
   await removeEntryCompletion(deps, input.workspaceId, entry);
+  const remainingLogs = await deps.activityLogs.listByTask(
+    input.workspaceId,
+    entry.taskId
+  );
+  const task = await deps.tasks.findById(input.workspaceId, entry.taskId);
+  const updatedTask =
+    wasCompleted &&
+    remainingLogs.length === 0 &&
+    task !== null &&
+    task.status === 'done'
+      ? await setTaskStatus(deps, {
+          workspaceId: input.workspaceId,
+          taskId: entry.taskId,
+          status: 'todo',
+        })
+      : task;
+
   return {
     entry: await deps.weeklyPool.save({
       ...entry,
       status: input.status,
       completedDate: null
     }),
-    log: null
+    log: null,
+    task: updatedTask
   };
 }
 
@@ -258,15 +292,31 @@ export interface RemoveWeekCompletionInput {
 }
 
 export async function removeWeekCompletion(
-  deps: Pick<ExecutionDependencies, 'activityLogs'>,
+  deps: Pick<ExecutionDependencies, 'activityLogs' | 'tasks' | 'clock'>,
   input: RemoveWeekCompletionInput
 ): Promise<void> {
   const end = endOfWeek(input.weekStart);
   const logs = await deps.activityLogs.listByTask(input.workspaceId, input.taskId);
+  let removed = false;
   for (const log of logs) {
     if (isWithinDateRange(log.completedDate, input.weekStart, end)) {
       await deps.activityLogs.delete(input.workspaceId, log.id);
+      removed = true;
     }
+  }
+  if (!removed) return;
+
+  const remaining = await deps.activityLogs.listByTask(
+    input.workspaceId,
+    input.taskId
+  );
+  const task = await deps.tasks.findById(input.workspaceId, input.taskId);
+  if (remaining.length === 0 && task !== null && task.status === 'done') {
+    await setTaskStatus(deps, {
+      workspaceId: input.workspaceId,
+      taskId: input.taskId,
+      status: 'todo',
+    });
   }
 }
 

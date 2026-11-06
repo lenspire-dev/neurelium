@@ -7,6 +7,9 @@ export interface WeeklyPoolRepository {
     workspaceId: WorkspaceId,
     entryId: WeeklyPoolEntryId
   ): Promise<WeeklyPoolEntry | null>;
+  listByWorkspace(
+    workspaceId: WorkspaceId
+  ): Promise<readonly WeeklyPoolEntry[]>;
   listByWeek(
     workspaceId: WorkspaceId,
     weekStart: WeekStart

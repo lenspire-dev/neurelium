@@ -19,6 +19,7 @@ import type { TaskRepository } from '../../domain/ports/task-repository';
 import type { TopicRepository } from '../../domain/ports/topic-repository';
 import type { WeeklyPoolRepository } from '../../domain/ports/weekly-pool-repository';
 import { getMilestoneProgress, getStudyRecommendation } from './analytics';
+import { deleteCategorySubtree, deleteTask } from './deletion';
 import {
   completeTask,
   removeRepeatedCompletion,
@@ -131,6 +132,11 @@ function createHarness() {
     async listByWeek(workspace, targetWeek) {
       return [...entries.values()].filter(
         (item) => item.workspaceId === workspace && item.weekStart === targetWeek
+      );
+    },
+    async listByWorkspace(workspace) {
+      return [...entries.values()].filter(
+        (item) => item.workspaceId === workspace
       );
     },
     async listByTask(workspace, taskId) {
@@ -442,9 +448,48 @@ describe('execution use cases', () => {
     });
 
     expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(0);
+    expect((await harness.tasks.findById(workspaceId, task.id))?.status).toBe('todo');
   });
 
-  test('keeps the task status manual while completing one occurrence', async () => {
+  test('keeps the task done while another completion remains', async () => {
+    const harness = createHarness();
+    const { task } = await seedTask(harness, 'Math', 5);
+    const entry = await addTaskToWeek(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+    });
+    const otherEntry = await addTaskToWeek(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+    });
+    await completeTask(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+      completedDate: '2026-10-28',
+      entryId: otherEntry.id,
+    });
+    await completeTask(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+      completedDate: '2026-10-29',
+      entryId: entry.id,
+    });
+
+    const reopened = await setWeeklyEntryStatus(harness, {
+      workspaceId,
+      entryId: entry.id,
+      status: 'in_progress',
+    });
+
+    expect(reopened.task?.status).toBe('done');
+    expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(1);
+  });
+
+  test('marks the task done when completing one occurrence', async () => {
     const harness = createHarness();
     const { task } = await seedTask(harness, 'Math', 5);
     const entry = await addTaskToWeek(harness, {
@@ -464,7 +509,8 @@ describe('execution use cases', () => {
     expect(completed.entry.completedDate).toBe('2026-10-28');
     expect(completed.log?.entryId).toBe(entry.id);
     expect(completed.log?.taskName).toBe(task.title);
-    expect((await harness.tasks.findById(workspaceId, task.id))?.status).toBe('todo');
+    expect(completed.task?.status).toBe('done');
+    expect((await harness.tasks.findById(workspaceId, task.id))?.status).toBe('done');
 
     const reopened = await setWeeklyEntryStatus(harness, {
       workspaceId,
@@ -474,6 +520,7 @@ describe('execution use cases', () => {
 
     expect(reopened.entry.status).toBe('in_progress');
     expect(reopened.entry.completedDate).toBeNull();
+    expect(reopened.task?.status).toBe('todo');
     expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(0);
   });
 
@@ -587,6 +634,79 @@ describe('task status use cases', () => {
       status: 'done',
     });
     expect(done.doneDate).toBe('2026-10-28');
+  });
+});
+
+describe('deletion use cases', () => {
+  test('deletes a task with its week entries and completion logs', async () => {
+    const harness = createHarness();
+    const { task } = await seedTask(harness, 'Math', 5);
+    const entry = await addTaskToWeek(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+    });
+    await completeTask(harness, {
+      workspaceId,
+      taskId: task.id,
+      weekStart,
+      completedDate: '2026-10-28',
+      entryId: entry.id,
+    });
+
+    await deleteTask(harness, { workspaceId, taskId: task.id });
+
+    expect(await harness.tasks.findById(workspaceId, task.id)).toBeNull();
+    expect(await harness.weeklyPool.findById(workspaceId, entry.id)).toBeNull();
+    expect(await harness.activityLogs.listByTask(workspaceId, task.id)).toHaveLength(0);
+  });
+
+  test('deletes a category subtree with its topics, tasks, and completions', async () => {
+    const harness = createHarness();
+    const root = await seedTask(harness, 'Math', 5);
+    const childCategory = await createCategory(harness, {
+      workspaceId,
+      parentId: root.category.id,
+      name: 'Algebra',
+      importanceWeight: 5,
+    });
+    const childTopic = await createTopic(harness, {
+      workspaceId,
+      categoryId: childCategory.id,
+      name: 'Linear',
+    });
+    const childTask = await createTask(harness, {
+      workspaceId,
+      topicId: childTopic.id,
+      title: 'Matrices',
+      taskWeight: 2,
+    });
+    const entry = await addTaskToWeek(harness, {
+      workspaceId,
+      taskId: childTask.id,
+      weekStart,
+    });
+    await completeTask(harness, {
+      workspaceId,
+      taskId: childTask.id,
+      weekStart,
+      completedDate: '2026-10-28',
+      entryId: entry.id,
+    });
+
+    await deleteCategorySubtree(harness, {
+      workspaceId,
+      categoryId: root.category.id,
+    });
+
+    expect(await harness.categories.findById(workspaceId, root.category.id)).toBeNull();
+    expect(await harness.categories.findById(workspaceId, childCategory.id)).toBeNull();
+    expect(await harness.topics.findById(workspaceId, root.topic.id)).toBeNull();
+    expect(await harness.topics.findById(workspaceId, childTopic.id)).toBeNull();
+    expect(await harness.tasks.findById(workspaceId, root.task.id)).toBeNull();
+    expect(await harness.tasks.findById(workspaceId, childTask.id)).toBeNull();
+    expect(await harness.weeklyPool.listByWorkspace(workspaceId)).toHaveLength(0);
+    expect(await harness.activityLogs.listByWorkspace(workspaceId)).toHaveLength(0);
   });
 });
 

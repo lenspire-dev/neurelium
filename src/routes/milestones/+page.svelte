@@ -670,6 +670,7 @@
       {context}
       inCurrentWeek={currentWeekTaskIds}
       busy={app.busy}
+      canDelete={app.canDelete}
       onClose={() => (selectedId = null)}
       onEdit={editSelected}
       onDelete={deleteSelected}

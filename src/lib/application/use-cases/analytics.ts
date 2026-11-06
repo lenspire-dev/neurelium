@@ -69,7 +69,6 @@ export interface MilestoneProgressDependencies {
   readonly categories: CategoryRepository;
   readonly topics: TopicRepository;
   readonly tasks: TaskRepository;
-  readonly activityLogs: ActivityLogRepository;
 }
 
 export interface GetMilestoneProgressInput {
@@ -84,12 +83,11 @@ export async function getMilestoneProgress(
 ): Promise<MilestoneProgress> {
   const today = requireIsoDate(input.today, 'Today');
 
-  const [milestone, categories, topics, tasks, activityLogs] = await Promise.all([
+  const [milestone, categories, topics, tasks] = await Promise.all([
     deps.milestones.findById(input.workspaceId, input.milestoneId),
     deps.categories.listByWorkspace(input.workspaceId),
     deps.topics.listByWorkspace(input.workspaceId),
     deps.tasks.listByWorkspace(input.workspaceId),
-    deps.activityLogs.listByWorkspace(input.workspaceId),
   ]);
 
   if (milestone === null) throw new NotFoundError('Milestone not found.');
@@ -100,6 +98,5 @@ export async function getMilestoneProgress(
     categories,
     topics,
     tasks,
-    activityLogs,
   });
 }

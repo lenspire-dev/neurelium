@@ -185,7 +185,9 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
     ],
     indexes: [
       keyIndex('idx_workspace', 'workspaceId'),
-      keyIndex('idx_topic', 'topicId')
+      keyIndex('idx_topic', 'topicId'),
+      keyIndex('idx_workspace_topic', 'workspaceId', 'topicId'),
+      keyIndex('idx_workspace_status', 'workspaceId', 'status')
     ]
   },
   {
@@ -221,6 +223,7 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
     ],
     indexes: [
       keyIndex('idx_workspace_date', 'workspaceId', 'completedDate'),
+      keyIndex('idx_workspace_date_created', 'workspaceId', 'completedDate', 'createdAt'),
       keyIndex('idx_task', 'taskId')
     ]
   },
@@ -258,7 +261,10 @@ export const APPWRITE_SCHEMA: readonly AppwriteTableDefinition[] = [
       timestamp('createdAt'),
       timestamp('updatedAt')
     ],
-    indexes: [keyIndex('idx_workspace', 'workspaceId')]
+    indexes: [
+      keyIndex('idx_workspace', 'workspaceId'),
+      keyIndex('idx_workspace_due', 'workspaceId', 'dueDate')
+    ]
   },
   {
     id: APPWRITE_SYSTEM_TABLES.subscriptions,
