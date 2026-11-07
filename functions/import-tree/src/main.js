@@ -421,13 +421,13 @@ async function assertImportQuota(tables, users, ownerId) {
 }
 
 async function importTree(context, body) {
-  const { actor, userId, tables, userTables, adminTeams, users } = context;
+  const { actor, userId, tables, userTables, adminTeams, adminUsers } = context;
   const workspaceId = text(body.workspaceId, 'workspaceId');
   const workspace = await loadWorkspace(userTables, workspaceId);
   await requireWriterRole(adminTeams, userId, workspace);
-  await assertImportQuota(tables, users, workspace.ownerId);
+  await assertImportQuota(tables, adminUsers, workspace.ownerId);
 
-  const { limits } = await readPlan(tables, users, workspace.ownerId);
+  const { limits } = await readPlan(tables, adminUsers, workspace.ownerId);
   const tree = parseCategory(body.tree, 'category');
   const incoming = countTreeRows(tree);
   if (incoming.categories + incoming.topics + incoming.tasks > limits.maxRowsPerImport) {
@@ -485,7 +485,7 @@ async function importTree(context, body) {
   }
 
   createNode(tree, null);
-  await assertTaskCapacity(tables, users, workspaceId, workspace.ownerId, rows.tasks.length);
+  await assertTaskCapacity(tables, adminUsers, workspaceId, workspace.ownerId, rows.tasks.length);
 
   const detail = `${rows.categories.length} categories · ${rows.topics.length} topics · ${rows.tasks.length} tasks`;
   rows.activityEvents = [
@@ -533,7 +533,7 @@ async function importTree(context, body) {
 }
 
 async function createRow(context, body) {
-  const { userId, actor, tables, userTables, adminTeams, users } = context;
+  const { userId, actor, tables, userTables, adminTeams, adminUsers } = context;
   const tableId = text(body.tableId, 'tableId');
   if (!CONTENT_TABLES.has(tableId)) {
     throw new AppError('This row cannot be created through this function.');
@@ -545,9 +545,9 @@ async function createRow(context, body) {
   await requireWriterRole(adminTeams, userId, workspace);
 
   if (tableId === TABLES.tasks) {
-    await assertTaskCapacity(tables, users, workspaceId, workspace.ownerId, 1);
+    await assertTaskCapacity(tables, adminUsers, workspaceId, workspace.ownerId, 1);
   } else if (tableId === TABLES.milestones) {
-    await assertMilestoneCapacity(tables, users, workspaceId, workspace.ownerId);
+    await assertMilestoneCapacity(tables, adminUsers, workspaceId, workspace.ownerId);
   }
 
   const data = await sanitizeRow(tables, tableId, input, workspaceId, userId, actor);
@@ -845,7 +845,7 @@ async function createWorkspace(context, body) {
 }
 
 async function inviteMember(context, body) {
-  const { tables, adminTeams, users, userTeams } = context;
+  const { tables, adminTeams, adminUsers, userTeams } = context;
   const workspaceId = text(body.workspaceId, 'workspaceId');
   const email = text(body.email, 'email');
   const role = text(body.role, 'role');
@@ -863,7 +863,7 @@ async function inviteMember(context, body) {
     throw new AppError('You cannot invite members to this workspace.', 403);
   }
 
-  const { plan, limits } = await readPlan(tables, users, workspace.ownerId);
+  const { plan, limits } = await readPlan(tables, adminUsers, workspace.ownerId);
   const memberships = await adminTeams.listMemberships({
     teamId: workspaceId,
     queries: [Query.limit(1)]
